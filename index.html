@@ -88,9 +88,10 @@ const WC_TITLE = {
   partial: "Przystanek częściowo dostosowany dla osób na wózkach"
 };
 
-// Square wheelchair badge drawn in a 24x24 box, centred on (cx, cy) and scaled to `size`.
+// Square wheelchair badge drawn in a 24x24 box, centred on (cx, cy), scaled to `size` and tilted along the label.
 function wheelchairBadge(cx, cy, size, kind) {
-  const g = el("g", { transform: `translate(${cx - size / 2},${cy - size / 2}) scale(${size / 24})` });
+  // rotated -45deg like the stop names, so the badge sits level with the text
+  const g = el("g", { transform: `translate(${cx},${cy}) rotate(-45) translate(${-size / 2},${-size / 2}) scale(${size / 24})` });
   if (kind === "partial") {
     // blue badge with the lower-right half red
     g.appendChild(el("rect", { width: 24, height: 24, rx: 5, fill: "#1d5fb5" }));
