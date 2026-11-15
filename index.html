@@ -56,7 +56,7 @@ const BACKDROPS = {
 const DISTRICT_COLOR = "#e03a45";
 const BUS_RED = "#ff0000";
 const BUS_ICON = "img/bus.png";           // red round bus icon shown for bus connections
-const CONN_ICON = 34;                     // diameter of the round connection icons
+const CONN_ICON = 24;                     // diameter of the round connection icons
 const CONN_FS = 20;                       // font size of the connection line numbers (regular weight)
 const CONN_PER_ROW = 6;                   // line numbers per row next to an icon
 const CONN_GAP = 26;                      // space between the "next stop" text and the connections
@@ -189,10 +189,10 @@ function render() {
   connNode = svg.appendChild(el("g"));
   connW = 0;
   if (groups.length) {
-    const red = "#c8202c", D = CONN_ICON;
+    const red = accent, D = CONN_ICON;      // ring + arrow in the line's purple
     // "next stop" symbol: ring with a dot, arrow pointing right
     connNode.appendChild(el("circle", { cx: 12, cy: CY, r: 9, fill: "none", stroke: red, "stroke-width": 3 }));
-    connNode.appendChild(el("circle", { cx: 12, cy: CY, r: 3.5, fill: red }));
+    connNode.appendChild(el("circle", { cx: 12, cy: CY, r: 5, fill: accent }));   // bigger dot, in the line's purple
     connNode.appendChild(el("path", { d: `M23,${CY} H45 M37,${CY - 8} L45,${CY} L37,${CY + 8}`, fill: "none", stroke: red, "stroke-width": 3 }));
     let bx = 49 + 16;
     groups.forEach((g, gi) => {
