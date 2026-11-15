@@ -28,6 +28,8 @@
   svg text { font-family: "Frutiger", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   .stop, .conn { cursor: pointer; }
   .stop:focus, .stop:focus-visible { outline: none; }   /* no focus box around a clicked stop */
+  .status { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 0 16px 6px; }
+  .status.err { color: #e8736f; }
   .note { margin: 12px 16px 24px; font-size: 12px; color: var(--muted); }
   .note code { color: var(--ink); }
 </style>
@@ -40,9 +42,11 @@
   <label>Typ <select id="type"><option value="">wszystkie</option></select></label>
 </div>
 
+<div class="status" id="status" role="status"></div>
 <div class="wrap"><svg id="display" role="img" aria-label="Schemat linii"></svg></div>
-<p class="note">Kliknij przystanek, żeby ustawić go jako „następny”. Przesiadki następnego przystanku są po prawej stronie nazwy; kliknij numer linii, żeby ją otworzyć.
-  Tło: <code>img/zwykla.png</code>. Dane: <code>data/lines.json</code> (domyślnie dane demonstracyjne).</p>
+<p class="note">Wpisz numer linii (np. <code>256</code>, <code>17</code>, <code>M2</code>) — dane pobierane są z rozkładu ZTM Warszawa.
+  Kliknij przystanek, żeby ustawić go jako „następny”; kliknij numer przesiadki, żeby otworzyć tę linię.
+  <span id="source"></span></p>
 
 <script>
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -65,7 +69,10 @@ const KIND = { bus: "bus", tram: "tram", metro: "M", train: "SKM", trolleybus: "
 const TYPE_ORDER = ["metro", "train", "tram", "trolleybus", "bus"];
 const $ = id => document.getElementById(id);
 
-let DATA = { lines: [] };
+let LIST = [];            // [{line, type, name}] for the search box
+let FULL = null;          // static fallback: whole data/lines.json (only when there is no server)
+let API_OK = false;       // true when server.py answers /api/lines
+let loadToken = 0, pollTimer = null;
 let current = { line: null, dir: 0, stop: 0 };
 let clockNode = null, connNode = null, connW = 0;
 // "next stop" label: alternates Polish / English every NEXT_LABEL_MS
@@ -313,13 +320,21 @@ function render() {
   }
 
   // ---- landmarks / streets: thin slanted lines under the district bar ----
+  // a stop's own landmark ("poi") wins; otherwise its street is printed where the route turns onto a new street
+  const labels = [];
+  let prevStreet = "";
+  stops.forEach(s => {
+    const st = s.street || "";
+    labels.push(s.poi || (st && st !== prevStreet ? st : ""));
+    if (st) prevStreet = st;
+  });
   stops.forEach((s, i) => {
-    if (!s.poi) return;
+    if (!labels[i]) return;
     const x = LX + i * step, y0 = barY + barH + 3;
     svg.appendChild(el("line", { x1: x, y1: y0, x2: x - 40, y2: y0 + 92, stroke: "#555", "stroke-width": 1 }));
     svg.appendChild(el("text", {
       transform: `translate(${x - 45},${y0 + 92}) rotate(-67)`, "font-size": 14, "font-style": "italic", fill: "#333"
-    }, s.poi));
+    }, labels[i]));
   });
 }
 
@@ -362,22 +377,66 @@ function fillDirections() {
   sel.value = current.dir;
 }
 
-function openLine(id, dir = 0) {
-  const line = DATA.lines.find(l => l.line.toLowerCase() === String(id).toLowerCase());
-  if (!line) return false;
+function setStatus(text, isError = false) {
+  const n = $("status");
+  n.textContent = text;
+  n.classList.toggle("err", isError);
+}
+
+// One line, from the server (live lookup) or, without a server, from the static data/lines.json.
+async function fetchLine(id) {
+  if (API_OK) {
+    const r = await fetch(`api/line/${encodeURIComponent(id)}`);
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+  return FULL.lines.find(l => l.line.toLowerCase() === String(id).trim().toLowerCase()) || null;
+}
+
+async function openLine(id, dir = 0) {
+  id = String(id).trim();
+  if (!id) return false;
+  const token = ++loadToken;
+  clearTimeout(pollTimer);
+  setStatus(`Wczytywanie linii ${id}…`);
+  let line;
+  try { line = await fetchLine(id); }
+  catch (e) { if (token === loadToken) setStatus("Nie udało się pobrać danych linii.", true); return false; }
+  if (token !== loadToken) return false;                                   // a newer request took over
+  if (!line) { setStatus(`Nie znaleziono linii „${id}”.`, true); return false; }
   current = { line, dir: Math.min(dir, line.directions.length - 1), stop: 0 };
   $("q").value = line.line;
   fillDirections();
   render();
   history.replaceState(null, "", `#${encodeURIComponent(line.line)}/${current.dir}`);
+  pollEnrich(line, token);
   return true;
+}
+
+// Streets and districts arrive gradually (the server looks them up one by one): refresh until complete.
+function pollEnrich(line, token) {
+  if (!line.enriching) {
+    setStatus(line.geocoder === "error" ? "Ulice i dzielnice chwilowo niedostępne (brak połączenia z geokoderem)." : "", line.geocoder === "error");
+    return;
+  }
+  setStatus(`Uzupełnianie ulic i dzielnic… (jeszcze ${line.enriching} przystanków)`);
+  pollTimer = setTimeout(async () => {
+    try {
+      const fresh = await fetchLine(line.line);
+      if (token !== loadToken || !fresh) return;
+      current.line = fresh;                                                // keeps the selected direction and stop
+      render();
+      pollEnrich(fresh, token);
+    } catch (e) { if (token === loadToken) setStatus(""); }
+  }, 3000);
 }
 
 function fillLineList() {
   const t = $("type").value;
   const dl = $("lines");
   dl.replaceChildren();
-  DATA.lines.filter(l => !t || l.type === t).forEach(l => dl.appendChild(new Option(`${l.line} — ${l.directions[0].name}`, l.line)));
+  LIST.filter(l => !t || l.type === t).forEach(l => dl.appendChild(new Option(`${l.line} — ${l.name}`, l.line)));
 }
 
 // Left / Right arrow keys move the selected ("next") stop; ignored while typing in the controls
@@ -395,25 +454,45 @@ document.addEventListener("keydown", e => {
 async function init() {
   setInterval(toggleNextLabel, NEXT_LABEL_MS);
   setInterval(() => { if (clockNode) { clockNode.textContent = clockText(); fitClock(); } }, 15000);
+
+  // 1) live lookup through server.py  2) fallback: the static demo file data/lines.json
   try {
-    DATA = await (await fetch("data/lines.json")).json();
+    const r = await fetch("api/lines");
+    if (!r.ok) throw new Error();
+    LIST = (await r.json()).lines;
+    API_OK = true;
+    $("source").textContent = "Dane: ZTM Warszawa (rozkłady GTFS), ulice i dzielnice: © współtwórcy OpenStreetMap.";
   } catch (e) {
-    $("display").outerHTML = "<p class='note'>Nie udało się wczytać data/lines.json (uruchom serwer, np. python -m http.server).</p>";
-    return;
+    try {
+      FULL = await (await fetch("data/lines.json")).json();
+      LIST = FULL.lines.map(l => ({ line: l.line, type: l.type, name: l.directions[0].name }));
+      $("source").textContent = "Tryb offline: dane demonstracyjne z data/lines.json. Uruchom server.py, żeby wyszukiwać prawdziwe linie.";
+    } catch (e2) {
+      $("display").outerHTML = "<p class='note'>Nie udało się wczytać danych (uruchom <code>python3 server.py</code>).</p>";
+      return;
+    }
   }
   try {
     await Promise.all(["300", "400", "700", "900", "italic 400"].map(w => document.fonts.load(`${w} 20px Frutiger`)));
   } catch (e) { /* fall back to system fonts */ }
-  [...new Set(DATA.lines.map(l => l.type))].forEach(t => $("type").add(new Option(t, t)));
+  [...new Set(LIST.map(l => l.type))].forEach(t => $("type").add(new Option(t, t)));
   fillLineList();
 
-  // after choosing a line / direction, give up focus so the arrow keys move the stop again
-  $("q").addEventListener("change", () => { if (openLine($("q").value.trim())) $("q").blur(); else $("q").select(); });
+  // type a line: open it on Enter / picking from the list, or automatically once the text is an exact line number
+  const submit = async () => { if (await openLine($("q").value)) $("q").blur(); else $("q").select(); };
+  $("q").addEventListener("change", submit);
+  let typing = null;
+  $("q").addEventListener("input", () => {
+    clearTimeout(typing);
+    const v = $("q").value.trim().toLowerCase();
+    if (v && LIST.some(l => l.line.toLowerCase() === v) && (!current.line || current.line.line.toLowerCase() !== v))
+      typing = setTimeout(() => openLine($("q").value), 450);
+  });
   $("dir").addEventListener("change", () => { openLine(current.line.line, +$("dir").value); $("dir").blur(); });
   $("type").addEventListener("change", fillLineList);
 
   const [h, d] = decodeURIComponent(location.hash.slice(1)).split("/");
-  if (!(h && openLine(h, +d || 0))) openLine(DATA.lines.find(l => l.line === "256") ? "256" : DATA.lines[0].line);
+  if (!(h && await openLine(h, +d || 0))) await openLine(LIST.find(l => l.line === "256") ? "256" : LIST[0].line);
 }
 init();
 </script>

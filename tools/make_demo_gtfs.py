@@ -32,11 +32,12 @@ def main(dst):
     files = {k: io.StringIO() for k in ("routes", "stops", "trips", "stop_times")}
     w = {k: csv.writer(v) for k, v in files.items()}
     w["routes"].writerow(["route_id", "route_short_name", "route_long_name", "route_type"])
-    w["stops"].writerow(["stop_id", "stop_name"])
+    w["stops"].writerow(["stop_id", "stop_name", "stop_lat", "stop_lon", "wheelchair_boarding"])
     w["trips"].writerow(["route_id", "trip_id", "direction_id"])
-    w["stop_times"].writerow(["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
-    for name, sid in stop_ids.items():
-        w["stops"].writerow([sid, name])
+    w["stop_times"].writerow(["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence", "pickup_type", "drop_off_type"])
+    for i, (name, sid) in enumerate(stop_ids.items()):
+        # invented coordinates along a line north-east of the centre; every 4th stop is not wheelchair accessible
+        w["stops"].writerow([sid, name, f"{52.28 + i * 0.002:.6f}", f"{21.04 + i * 0.003:.6f}", 2 if i % 4 == 1 else 1])
     for line, (rtype, seq) in LINES.items():
         w["routes"].writerow([line, line, "", rtype])
         total = seq[-1][1]
@@ -46,7 +47,8 @@ def main(dst):
             ordered = seq if direction == 0 else [(n, total - m) for n, m in reversed(seq)]
             for i, (name, m) in enumerate(ordered, 1):
                 t = f"{8 + m // 60:02d}:{m % 60:02d}:00"
-                w["stop_times"].writerow([trip, t, t, stop_ids[name], i])
+                req = 3 if name in ("Małborska", "Chudoby") else 0     # "na żądanie" demo stops
+                w["stop_times"].writerow([trip, t, t, stop_ids[name], i, req, req])
     with zipfile.ZipFile(dst, "w") as zf:
         for k, v in files.items():
             zf.writestr(f"{k}.txt", v.getvalue())
