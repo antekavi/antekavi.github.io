@@ -38,6 +38,12 @@ import gtfs_to_json  # noqa: E402
 DEFAULT_GTFS = "https://mkuran.pl/gtfs/warsaw.zip"
 DEFAULT_GEOCODER = "https://nominatim.openstreetmap.org/reverse"
 REFRESH_SECONDS = 24 * 3600
+# The City of Warsaw's open-data API (new portal). Keys from https://dane.um.warszawa.pl/pl/key-api are JWTs
+# sent RAW in the Authorization header (no "Bearer "), with POST /api/action/<action> and a JSON body.
+CITY_API_HOST = "dane.um.warszawa.pl"
+CITY_API_BASE = f"https://{CITY_API_HOST}/api/action/"
+TOKEN_FILE = os.path.join(ROOT, "api_token.txt")          # git-ignored; never served (see BLOCKED below)
+PROBE_FILE = os.path.join(DATA, "api_probe.txt")
 # which Nominatim address fields count as the "district" (first non-empty wins) and as the street
 DISTRICT_KEYS = ("suburb", "city_district", "borough", "quarter", "neighbourhood")
 STREET_KEYS = ("road", "pedestrian", "footway", "path", "cycleway")
@@ -45,6 +51,88 @@ STREET_KEYS = ("road", "pedestrian", "footway", "path", "cycleway")
 
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+# --------------------------------------------------------------------------- City of Warsaw API
+def load_token(cli_value=""):
+    """API token from --api-token, then $WARSAW_API_TOKEN, then the first non-comment line of api_token.txt."""
+    if cli_value and cli_value.strip():
+        return cli_value.strip()
+    env = os.environ.get("WARSAW_API_TOKEN", "").strip()
+    if env:
+        return env
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    return line
+    return ""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would re-send the Authorization header to wherever it points: refuse instead."""
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+class CityAPI:
+    """Minimal client for https://dane.um.warszawa.pl. The token is only ever sent to that host,
+    from this server (never to the browser)."""
+
+    def __init__(self, token, user_agent):
+        self.token, self.ua = token, user_agent
+        self.opener = urllib.request.build_opener(_NoRedirect)
+
+    def call(self, action, body=None, timeout=25):
+        """POST one action. Returns (http_status, response_bytes); HTTP errors are returned, not raised
+        (the new host answers 500 for every rejected request)."""
+        url = CITY_API_BASE + urllib.parse.quote(action, safe="_")
+        if urllib.parse.urlparse(url).hostname != CITY_API_HOST:       # belt and braces
+            raise ValueError("refusing to send the token to another host")
+        req = urllib.request.Request(url, data=json.dumps(body or {}).encode(), method="POST", headers={
+            "Authorization": self.token, "Content-Type": "application/json",
+            "Accept": "application/json", "User-Agent": self.ua})
+        try:
+            with self.opener.open(req, timeout=timeout) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+
+def probe_api(api, path=PROBE_FILE):
+    """Call the City API actions known from its public docs with a few plausible request bodies and write
+    status + the start of every answer to `path`, so the real field names can be checked. The token is never written."""
+    stop, pole = "6045", "03"                      # the example stop used in the City's own documentation
+    tries = [
+        ("get_ztm_lista_linii_na_przystanku", {"busstopId": stop, "busstopNr": pole}),
+        ("get_ztm_lista_linii_na_przystanku", {"zespol": stop, "slupek": pole}),
+        ("get_ztm_lista_linii_na_przystanku", {}),
+        ("get_ztm_odjazdy_linii_z_przystanku", {"busstopId": stop, "busstopNr": pole, "line": "256"}),
+        ("get_ztm_odjazdy_linii_z_przystanku", {"busstopId": stop, "busstopNr": pole}),
+        ("get_ztm_lokalizacja_pojazdow", {"type": 1}),
+    ]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = [f"City API probe, {time.strftime('%Y-%m-%d %H:%M:%S')}  (host {CITY_API_HOST}; token not included)", ""]
+    for action, body in tries:
+        try:
+            status, raw = api.call(action, body)
+            text = raw.decode("utf-8", "replace")
+            try:
+                data = json.loads(text)
+                kind = f"JSON {type(data).__name__}" + (f" with {len(data)} items" if isinstance(data, (list, dict)) else "")
+            except ValueError:
+                kind = "not JSON"
+            lines += [f"== {action}  body={json.dumps(body)}", f"   HTTP {status}, {len(raw)} bytes, {kind}",
+                      "   " + text[:700].replace("\n", " "), ""]
+        except Exception as e:
+            lines += [f"== {action}  body={json.dumps(body)}", f"   failed: {e}", ""]
+        log(lines[-3] if len(lines) >= 3 else lines[-1])
+        time.sleep(0.5)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    log(f"probe written to {path}")
 
 
 # --------------------------------------------------------------------------- streets + districts
@@ -226,9 +314,23 @@ def line_payload(line_id):
     return out
 
 
+# never served over HTTP: internals, caches, the API token and anything starting with "." (.git, .gitignore ...)
+BLOCKED = ("/data/geo_cache", "/data/warsaw_gtfs", "/data/api_probe", "/server.py", "/tools/", "/api_token")
+
+
+def is_blocked(path):
+    p = urllib.parse.unquote(path)
+    return p.startswith(BLOCKED) or "/." in p
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
+
+    def do_HEAD(self):
+        if is_blocked(urllib.parse.urlparse(self.path).path):
+            return self.send_error(404)
+        return super().do_HEAD()
 
     def log_message(self, fmt, *args):
         if "/api/" not in self.path:
@@ -250,8 +352,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/line/"):
             payload = line_payload(urllib.parse.unquote(path[len("/api/line/"):]))
             return self._json(payload) if payload else self._json({"error": "not found"}, 404)
-        if path.startswith(("/data/geo_cache", "/data/warsaw_gtfs", "/server.py", "/tools/")):
-            return self.send_error(404)             # don't serve internals
+        if is_blocked(path):
+            return self.send_error(404)             # don't serve internals, secrets or .git
         return super().do_GET()
 
 
@@ -266,10 +368,20 @@ def main():
     ap.add_argument("--geocoder", default=DEFAULT_GEOCODER, help="Nominatim-compatible reverse-geocoding URL")
     ap.add_argument("--contact", default="", help="your e-mail/site, sent in the User-Agent (Nominatim asks for this)")
     ap.add_argument("--rebuild", action="store_true", help="re-download and re-convert now")
+    ap.add_argument("--api-token", default="", help="City of Warsaw API token (or $WARSAW_API_TOKEN, or api_token.txt)")
+    ap.add_argument("--probe-api", action="store_true",
+                    help="test the City API token, write what the API answers to data/api_probe.txt, then exit")
     args = ap.parse_args()
 
     os.makedirs(DATA, exist_ok=True)
     ua = f"sip-strip-map/1.0 ({args.contact or 'personal project'})"
+    token = load_token(args.api_token)
+    if args.probe_api:
+        if not token:
+            raise SystemExit("No token: put it in api_token.txt, set $WARSAW_API_TOKEN or use --api-token.")
+        probe_api(CityAPI(token, ua))
+        return
+    log("City API token: " + ("found (used by --probe-api)" if token else "none (not needed for line lookup)"))
     GEO = Geocoder(args.geocoder, ua, os.path.join(DATA, "geo_cache.sqlite"), enabled=not args.no_geocode)
     INDEX.load(refresh(args.gtfs, args.overrides, args.rebuild))
 

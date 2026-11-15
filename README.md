@@ -24,7 +24,25 @@ minutes. After that it starts instantly and refreshes itself every 24 h.
 
 Options: `--gtfs PATH_OR_URL`, `--port`, `--host 0.0.0.0`, `--no-geocode`, `--geocoder URL` (any
 Nominatim-compatible server, e.g. your own), `--overrides file.csv` (`stop_name,district,poi,on_request,wheelchair`
-– values there win over everything), `--rebuild`.
+– values there win over everything), `--rebuild`, `--api-token TOKEN`, `--probe-api`.
+
+## City of Warsaw API token
+
+The token from https://dane.um.warszawa.pl/pl/key-api lives in `api_token.txt` (git-ignored, never served by the
+server; or set `$WARSAW_API_TOKEN`, or pass `--api-token`). It is sent only by `server.py`, only to
+`dane.um.warszawa.pl`, as the raw `Authorization` header (no `Bearer`), never to the browser. **Do not commit it,
+and keep the repository's `.gitignore`.** If it was ever pushed or shared, create a new one on the portal.
+
+Line lookups do not use it: the City's documented actions (`get_ztm_odjazdy_linii_z_przystanku`,
+`get_ztm_lista_linii_na_przystanku`, `get_ztm_lokalizacja_pojazdow`) cover departures, lines at a stop and live
+vehicle positions, not "all stops of a line", streets or districts. To see what your token really returns:
+
+```
+python3 server.py --probe-api
+```
+
+This calls those actions once with a few request bodies and writes HTTP status + the start of every answer to
+`data/api_probe.txt` (the token is not written there). Send that file along and the useful parts can be wired in.
 
 Without the server (plain static hosting) the page falls back to the demo data in `data/lines.json`.
 Demo data: `python3 tools/make_demo_gtfs.py demo.zip && python3 server.py --gtfs demo.zip --no-geocode`.
@@ -34,3 +52,4 @@ Demo data: `python3 tools/make_demo_gtfs.py demo.zip && python3 server.py --gtfs
 * Nominatim's public server is for light use. Keep `--contact` set and don't expose it to many users at once.
 * The City's old `api.um.warszawa.pl` was switched off on 21 Oct 2026. The new `dane.um.warszawa.pl` needs a personal token
   and, as far as I could verify, has no "all stops of a line" endpoint, which is why the GTFS feed is used.
+* The server never serves dot-files (`.git`, `.gitignore`), `api_token.txt`, `server.py`, `tools/` or the caches.

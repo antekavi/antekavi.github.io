@@ -1,0 +1,8 @@
+api_token.txt
+.env
+data/api_probe.txt
+data/geo_cache.sqlite*
+data/warsaw_gtfs.zip*
+data/warsaw_lines.json*
+__pycache__/
+*.pyc
