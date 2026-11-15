@@ -61,6 +61,11 @@ const $ = id => document.getElementById(id);
 let DATA = { lines: [] };
 let current = { line: null, dir: 0, stop: 0 };
 let clockNode = null;
+// "next stop" label: alternates Polish / English every NEXT_LABEL_MS
+const NEXT_LABELS = ["NASTĘPNY PRZYSTANEK: ", "NEXT STOP: "];
+const NEXT_LABEL_MS = 10000;
+let nextLabelIdx = 0;
+let nextNode = null, nextT1 = null, nextT2 = null, nextField = { l: 0, r: 0 };
 
 function el(name, attrs = {}, text) {
   const n = document.createElementNS(SVGNS, name);
@@ -137,16 +142,13 @@ function render() {
 
   // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) ----
   const fieldL = 372, fieldR = groups.length ? connX - 30 : 1902;
-  const next = el("text", { x: (fieldL + fieldR) / 2, y: 64, "text-anchor": "middle", fill: "#1a1a1a" });
-  const t1 = el("tspan", { "font-size": 42, "font-weight": 300 }, "NASTĘPNY PRZYSTANEK: ");
-  const t2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
-  next.append(t1, t2);
-  svg.appendChild(next);
-  const tw = next.getComputedTextLength();
-  if (tw > fieldR - fieldL) {
-    const k = (fieldR - fieldL) / tw;
-    t1.setAttribute("font-size", 42 * k); t2.setAttribute("font-size", 54 * k);
-  }
+  nextNode = el("text", { x: (fieldL + fieldR) / 2, y: 64, "text-anchor": "middle", fill: "#1a1a1a" });
+  nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, NEXT_LABELS[nextLabelIdx]);
+  nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
+  nextNode.append(nextT1, nextT2);
+  svg.appendChild(nextNode);
+  nextField = { l: fieldL, r: fieldR };
+  fitNext();
 
   // ---- strip geometry ----
   const LX = 400;
@@ -214,6 +216,25 @@ function render() {
   });
 }
 
+// shrink the "next stop" line only if it is wider than the space available
+function fitNext() {
+  if (!nextNode) return;
+  nextT1.setAttribute("font-size", 42); nextT2.setAttribute("font-size", 54);
+  const tw = nextNode.getComputedTextLength();
+  const room = nextField.r - nextField.l;
+  if (tw > room) {
+    const k = room / tw;
+    nextT1.setAttribute("font-size", 42 * k); nextT2.setAttribute("font-size", 54 * k);
+  }
+}
+
+function toggleNextLabel() {
+  nextLabelIdx = (nextLabelIdx + 1) % NEXT_LABELS.length;
+  if (!nextT1) return;
+  nextT1.textContent = NEXT_LABELS[nextLabelIdx];
+  fitNext();
+}
+
 function fitClock() {
   if (!clockNode) return;
   clockNode.setAttribute("font-size", 20);
@@ -247,6 +268,7 @@ function fillLineList() {
 }
 
 async function init() {
+  setInterval(toggleNextLabel, NEXT_LABEL_MS);
   setInterval(() => { if (clockNode) { clockNode.textContent = clockText(); fitClock(); } }, 15000);
   try {
     DATA = await (await fetch("data/lines.json")).json();
