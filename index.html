@@ -54,9 +54,11 @@ const BACKDROPS = {
   zwykla: { img: "img/zwykla.png", accent: "#88007e" },
 };
 const DISTRICT_COLOR = "#e03a45";
-// connection types shown with an image instead of the coloured text tag (w/h in backdrop pixels)
-const TYPE_ICONS = { bus: { img: "img/bus.png", w: 31, h: 36 } };
-const CONN_GAP = 40;                       // space between the "next stop" text and the connections
+const BUS_RED = "#ff0000";
+const BUS_ICON = "img/bus.png";           // red round bus icon shown for bus connections
+const CONN_ICON = 34;                     // diameter of the round connection icons
+const CONN_PER_ROW = 6;                   // line numbers per row next to an icon
+const CONN_GAP = 26;                      // space between the "next stop" text and the connections
 const TYPE_COLORS = { bus: "#88007e", tram: "#e8730c", metro: "#1d5fb5", train: "#2b8a57", trolleybus: "#7a5a12" };
 const KIND = { bus: "bus", tram: "tram", metro: "M", train: "SKM", trolleybus: "trol" };
 const TYPE_ORDER = ["metro", "train", "tram", "trolleybus", "bus"];
@@ -64,7 +66,7 @@ const $ = id => document.getElementById(id);
 
 let DATA = { lines: [] };
 let current = { line: null, dir: 0, stop: 0 };
-let clockNode = null, connNode = null;
+let clockNode = null, connNode = null, connW = 0;
 // "next stop" label: alternates Polish / English every NEXT_LABEL_MS
 // `req` is inserted after the label when the selected stop is "na żądanie" (on request)
 const NEXT_LABELS = [
@@ -124,6 +126,20 @@ function wheelchairBadge(cx, cy, size, kind) {
   return g;
 }
 
+// Round red tram icon (same look as img/bus.png), centred on (cx, cy), diameter d
+function tramIcon(cx, cy, d) {
+  const g = el("g", { transform: `translate(${cx - d / 2},${cy - d / 2}) scale(${d / 50})` });
+  const W = { stroke: "#fff", "stroke-width": 2, "stroke-linecap": "round", fill: "none" };
+  g.appendChild(el("circle", { cx: 25, cy: 25, r: 25, fill: BUS_RED }));
+  g.appendChild(el("path", { ...W, d: "M20,8.5 H30 M25,8.5 V13" }));
+  g.appendChild(el("rect", { x: 15, y: 13, width: 20, height: 24, rx: 5, fill: "#fff" }));
+  g.appendChild(el("rect", { x: 18, y: 16, width: 14, height: 9, rx: 1.5, fill: BUS_RED }));
+  g.appendChild(el("circle", { cx: 20.5, cy: 31, r: 1.8, fill: BUS_RED }));
+  g.appendChild(el("circle", { cx: 29.5, cy: 31, r: 1.8, fill: BUS_RED }));
+  g.appendChild(el("path", { ...W, d: "M19,37 L16,43 M31,37 L34,43" }));
+  return g;
+}
+
 function render() {
   const line = current.line;
   if (!line) return;
@@ -153,50 +169,58 @@ function render() {
   svg.appendChild(clockNode);
   fitClock();
 
-  // ---- header: connections of the selected stop (placed right after the "next stop" text, see fitNext) ----
+  // ---- header: connections of the selected stop; the "next stop" text and the connections are centred together (see fitNext) ----
   const conns = stops[cur].connections;
   const groups = TYPE_ORDER.map(t => ({ type: t, items: conns.filter(c => c.type === t) })).filter(g => g.items.length);
-  groups.forEach(g => {
-    g.shown = g.items.slice(0, 18);
-    g.rows = Math.min(3, g.shown.length);
-    g.cols = Math.ceil(g.shown.length / g.rows);
-    g.cell = Math.max(...g.shown.map(c => c.line.length)) * 13 + 18;
-    g.icon = TYPE_ICONS[g.type];                                    // image instead of the text tag, where one is defined
-    g.tagW = g.icon ? g.icon.w : KIND[g.type].length * 11 + 16;
-    g.w = g.tagW + 6 + g.cols * g.cell + 20;
-  });
-  const blockW = groups.length ? 66 + groups.reduce((a, g) => a + g.w, 0) : 0;
-  connNode = null;
+  const CY = 45;                                              // vertical centre of the connections, level with the "next stop" text
+  connNode = svg.appendChild(el("g"));
+  connW = 0;
   if (groups.length) {
-    connNode = el("g");
-    let bx = 0;
-    connNode.appendChild(el("path", { d: `M${bx + 6},38 H${bx + 48}`, stroke: "#d4202c", "stroke-width": 3 }));
-    connNode.appendChild(el("path", { d: `M${bx},38 l10,-7 v14 z M${bx + 54},38 l-10,-7 v14 z`, fill: "#d4202c" }));
-    connNode.appendChild(el("circle", { cx: bx + 27, cy: 38, r: 7, fill: "#efefef", stroke: "#d4202c", "stroke-width": 3 }));
-    bx += 66;
-    groups.forEach(g => {
-      if (g.icon) {
-        connNode.appendChild(el("image", { href: g.icon.img, x: bx, y: 6, width: g.icon.w, height: g.icon.h }));
+    const red = "#c8202c", D = CONN_ICON;
+    // "next stop" symbol: ring with a dot, arrow pointing right
+    connNode.appendChild(el("circle", { cx: 12, cy: CY, r: 9, fill: "none", stroke: red, "stroke-width": 3 }));
+    connNode.appendChild(el("circle", { cx: 12, cy: CY, r: 3.5, fill: red }));
+    connNode.appendChild(el("path", { d: `M23,${CY} H45 M37,${CY - 8} L45,${CY} L37,${CY + 8}`, fill: "none", stroke: red, "stroke-width": 3 }));
+    let bx = 49 + 16;
+    groups.forEach((g, gi) => {
+      const shown = g.items.slice(0, CONN_PER_ROW * 2), rows = Math.ceil(shown.length / CONN_PER_ROW);
+      // icon / tag, centred on the rows of numbers
+      let iw;
+      if (g.type === "bus") {
+        connNode.appendChild(el("image", { href: BUS_ICON, x: bx, y: CY - D / 2, width: D, height: D }));
+        iw = D;
+      } else if (g.type === "tram") {
+        connNode.appendChild(tramIcon(bx + D / 2, CY, D));
+        iw = D;
       } else {
-        connNode.appendChild(el("rect", { x: bx, y: 8, width: g.tagW, height: 20, rx: 3, fill: TYPE_COLORS[g.type] }));
-        connNode.appendChild(el("text", { x: bx + g.tagW / 2, y: 24, "font-size": 15, "font-weight": 700, fill: "#fff", "text-anchor": "middle" }, KIND[g.type]));
+        iw = KIND[g.type].length * 11 + 16;
+        connNode.appendChild(el("rect", { x: bx, y: CY - 12, width: iw, height: 24, rx: 3, fill: TYPE_COLORS[g.type] }));
+        connNode.appendChild(el("text", { x: bx + iw / 2, y: CY + 5.5, "font-size": 16, "font-weight": 700, fill: "#fff", "text-anchor": "middle" }, KIND[g.type]));
       }
-      g.shown.forEach((c, k) => {
-        const col = Math.floor(k / g.rows), row = k % g.rows;
-        const tx = bx + g.tagW + 6 + col * g.cell;
-        const cg = el("g", { class: "conn" });
-        cg.appendChild(el("rect", { x: tx, y: 7 + row * 21, width: g.cell - 3, height: 21, fill: "transparent" }));
-        cg.appendChild(el("text", { x: tx, y: 24 + row * 21, "font-size": 19, "font-weight": 400, fill: "#555" }, c.line));
-        cg.appendChild(el("title", {}, `${c.line} (${c.type})`));
-        cg.addEventListener("click", () => openLine(c.line));
-        connNode.appendChild(cg);
-      });
-      bx += g.w;
+      // line numbers, vertically centred with the icon (rows of CONN_PER_ROW)
+      let maxEnd = bx + iw;
+      for (let r = 0; r < rows; r++) {
+        let tx = bx + iw + 9;
+        const rowY = CY + (r - (rows - 1) / 2) * 27;
+        shown.slice(r * CONN_PER_ROW, (r + 1) * CONN_PER_ROW).forEach(c => {
+          const cg = el("g", { class: "conn" });
+          const t = el("text", { x: tx, y: rowY + 8, "font-size": 22, "font-weight": 700, fill: "#555" }, c.line);
+          cg.appendChild(t);
+          cg.appendChild(el("title", {}, `${c.line} (${c.type})`));
+          connNode.appendChild(cg);
+          const w = t.getComputedTextLength();
+          cg.insertBefore(el("rect", { x: tx - 4, y: rowY - 13, width: w + 8, height: 26, fill: "transparent" }), t);
+          cg.addEventListener("click", () => openLine(c.line));
+          tx += w + 11;
+        });
+        maxEnd = Math.max(maxEnd, tx - 11);
+      }
+      bx = maxEnd + 24;
     });
-    svg.appendChild(connNode);
+    connW = bx - 24;
   }
 
-  // ---- header: next stop, left-aligned at the backdrop's rule (x 364..1909, y 77); connections follow its right end ----
+  // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) together with the connections ----
   const fieldL = 372, fieldR = 1902;
   nextNode = el("text", { x: fieldL, y: 64, fill: "#1a1a1a" });
   nextOnRequest = !!stops[cur].onRequest;
@@ -204,7 +228,7 @@ function render() {
   nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
   nextNode.append(nextT1, nextT2);
   svg.appendChild(nextNode);
-  nextField = { l: fieldL, r: fieldR - (blockW ? blockW + CONN_GAP : 0) };   // the text must leave room for the connections
+  nextField = { l: fieldL, r: fieldR };                       // the text must leave room for the connections (fitNext)
   fitNext();
 
   // ---- strip geometry ----
@@ -286,17 +310,22 @@ function render() {
   });
 }
 
-// shrink the "next stop" line only if it is wider than the space available, then put the connections right after it
+// shrink the "next stop" line only if it is wider than the space left beside the connections,
+// then centre text + connections together in the field
 function fitNext() {
   if (!nextNode) return;
   nextT1.setAttribute("font-size", 42); nextT2.setAttribute("font-size", 54);
-  const tw = nextNode.getComputedTextLength();
-  const room = nextField.r - nextField.l;
-  if (tw > room) {
-    const k = room / tw;
+  const extra = connW ? CONN_GAP + connW : 0;
+  const full = nextField.r - nextField.l;
+  let tw = nextNode.getComputedTextLength();
+  if (tw > full - extra) {
+    const k = (full - extra) / tw;
     nextT1.setAttribute("font-size", 42 * k); nextT2.setAttribute("font-size", 54 * k);
+    tw = nextNode.getComputedTextLength();
   }
-  if (connNode) connNode.setAttribute("transform", `translate(${nextField.l + nextNode.getComputedTextLength() + CONN_GAP},0)`);
+  const start = nextField.l + (full - tw - extra) / 2;
+  nextNode.setAttribute("x", start);
+  if (connNode) connNode.setAttribute("transform", `translate(${start + tw + CONN_GAP},0)`);
 }
 
 function toggleNextLabel() {
