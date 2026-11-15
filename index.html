@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strip map</title>
+<link rel="icon" href="data:,">
+<style>
+  /* Frutiger: 300 Light, 400 Roman, 700 Bold, 900 Black (+ italics). The files lack ą ć ę ń ś ź ż, which fall back to Segoe UI. */
+  @font-face { font-family: "Frutiger"; font-weight: 300; font-style: normal; font-display: swap; src: url("fonts/Frutiger_Light.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/Frutiger_Roman.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/Frutiger_Bold.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 900; font-style: normal; font-display: swap; src: url("fonts/Frutiger_Black.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 300; font-style: italic; font-display: swap; src: url("fonts/Frutiger_Light_Italic.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 400; font-style: italic; font-display: swap; src: url("fonts/Frutiger_Roman_Italic.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 700; font-style: italic; font-display: swap; src: url("fonts/Frutiger_Bold_Italic.ttf") format("truetype"); }
+  @font-face { font-family: "Frutiger"; font-weight: 900; font-style: italic; font-display: swap; src: url("fonts/Frutiger_Black_Italic.ttf") format("truetype"); }
+  :root { --bg: #17171a; --ink: #e8e6e1; --muted: #9a979e; --rule: #44434a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.4 "Frutiger", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 14px 16px; }
+  .controls label { font-size: 13px; color: var(--muted); }
+  select, input { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: #26252b; color: var(--ink); }
+  input { width: 120px; }
+  .wrap { overflow-x: auto; margin: 0 16px; }
+  svg#display { display: block; width: 100%; height: auto; }
+  svg text { font-family: "Frutiger", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .stop, .conn { cursor: pointer; }
+  .note { margin: 12px 16px 24px; font-size: 12px; color: var(--muted); }
+  .note code { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="controls">
+  <label>Linia <input id="q" list="lines" placeholder="np. 256" autocomplete="off"></label>
+  <datalist id="lines"></datalist>
+  <label>Kierunek <select id="dir"></select></label>
+  <label>Typ <select id="type"><option value="">wszystkie</option></select></label>
+</div>
+
+<div class="wrap"><svg id="display" role="img" aria-label="Schemat linii"></svg></div>
+<p class="note">Kliknij przystanek, żeby ustawić go jako „następny”. Przesiadki następnego przystanku są po prawej; kliknij numer linii, żeby ją otworzyć.
+  Tło: <code>img/zwykla.png</code>. Dane: <code>data/lines.json</code> (domyślnie dane demonstracyjne).</p>
+
+<script>
+const SVGNS = "http://www.w3.org/2000/svg";
+const PW = 1920, PH = 540;               // size of the backdrop image; everything below is drawn in these pixels
+
+// One entry per backdrop image. A line picks one with its optional "service" field (default "zwykla").
+// To add e.g. an express-line look: save img/przyspieszona.png (1920x540) and add an entry here.
+const BACKDROPS = {
+  zwykla: { img: "img/zwykla.png", accent: "#88007e" },
+};
+const DISTRICT_COLOR = "#e03a45";
+const TYPE_COLORS = { bus: "#88007e", tram: "#e8730c", metro: "#1d5fb5", train: "#2b8a57", trolleybus: "#7a5a12" };
+const KIND = { bus: "bus", tram: "tram", metro: "M", train: "SKM", trolleybus: "trol" };
+const TYPE_ORDER = ["metro", "train", "tram", "trolleybus", "bus"];
+const $ = id => document.getElementById(id);
+
+let DATA = { lines: [] };
+let current = { line: null, dir: 0, stop: 0 };
+let clockNode = null;
+
+function el(name, attrs = {}, text) {
+  const n = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function clockText() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const days = ["nd", "pn", "wt", "śr", "cz", "pt", "sb"];
+  return `${p(d.getHours())}:${p(d.getMinutes())} ${days[d.getDay()]} ${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
+}
+
+function render() {
+  const line = current.line;
+  if (!line) return;
+  const dir = line.directions[current.dir] || line.directions[0];
+  const stops = dir.stops;
+  const n = stops.length;
+  const bd = BACKDROPS[line.service] || BACKDROPS.zwykla;
+  const accent = bd.accent;
+  const cur = Math.min(current.stop, n - 1);
+
+  const svg = $("display");
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${PW} ${PH}`);
+  svg.style.minWidth = "760px";
+  svg.appendChild(el("image", { href: bd.img, x: 0, y: 0, width: PW, height: PH }));
+
+  // ---- line number inside the (empty) number box of the backdrop ----
+  svg.appendChild(el("text", { x: 253.5, y: 101, "font-size": line.line.length > 3 ? 62 : 86, "font-weight": 700, fill: "#1a1a1a", "text-anchor": "middle" }, line.line));
+
+  // ---- clock inside the blue box of the backdrop ----
+  clockNode = el("text", { x: 26, y: 522, "font-size": 20, "font-weight": 700, fill: "#fff" }, clockText());
+  svg.appendChild(clockNode);
+  fitClock();
+
+  // ---- header right: connections of the selected stop ----
+  const conns = stops[cur].connections;
+  const groups = TYPE_ORDER.map(t => ({ type: t, items: conns.filter(c => c.type === t) })).filter(g => g.items.length);
+  groups.forEach(g => {
+    g.shown = g.items.slice(0, 18);
+    g.rows = Math.min(3, g.shown.length);
+    g.cols = Math.ceil(g.shown.length / g.rows);
+    g.cell = Math.max(...g.shown.map(c => c.line.length)) * 13 + 18;
+    g.tagW = KIND[g.type].length * 11 + 16;
+    g.w = g.tagW + 6 + g.cols * g.cell + 20;
+  });
+  const blockW = groups.length ? 66 + groups.reduce((a, g) => a + g.w, 0) : 0;
+  const connX = PW - 16 - blockW;
+  if (groups.length) {
+    let bx = connX;
+    svg.appendChild(el("path", { d: `M${bx + 6},38 H${bx + 48}`, stroke: "#d4202c", "stroke-width": 3 }));
+    svg.appendChild(el("path", { d: `M${bx},38 l10,-7 v14 z M${bx + 54},38 l-10,-7 v14 z`, fill: "#d4202c" }));
+    svg.appendChild(el("circle", { cx: bx + 27, cy: 38, r: 7, fill: "#efefef", stroke: "#d4202c", "stroke-width": 3 }));
+    bx += 66;
+    groups.forEach(g => {
+      svg.appendChild(el("rect", { x: bx, y: 8, width: g.tagW, height: 20, rx: 3, fill: TYPE_COLORS[g.type] }));
+      svg.appendChild(el("text", { x: bx + g.tagW / 2, y: 24, "font-size": 15, "font-weight": 700, fill: "#fff", "text-anchor": "middle" }, KIND[g.type]));
+      g.shown.forEach((c, k) => {
+        const col = Math.floor(k / g.rows), row = k % g.rows;
+        const tx = bx + g.tagW + 6 + col * g.cell;
+        const cg = el("g", { class: "conn" });
+        cg.appendChild(el("rect", { x: tx, y: 7 + row * 21, width: g.cell - 3, height: 21, fill: "transparent" }));
+        cg.appendChild(el("text", { x: tx, y: 24 + row * 21, "font-size": 19, "font-weight": 400, fill: "#555" }, c.line));
+        cg.appendChild(el("title", {}, `${c.line} (${c.type})`));
+        cg.addEventListener("click", () => openLine(c.line));
+        svg.appendChild(cg);
+      });
+      bx += g.w;
+    });
+  }
+
+  // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) ----
+  const fieldL = 372, fieldR = groups.length ? connX - 30 : 1902;
+  const next = el("text", { x: (fieldL + fieldR) / 2, y: 64, "text-anchor": "middle", fill: "#1a1a1a" });
+  const t1 = el("tspan", { "font-size": 42, "font-weight": 300 }, "NASTĘPNY PRZYSTANEK: ");
+  const t2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
+  next.append(t1, t2);
+  svg.appendChild(next);
+  const tw = next.getComputedTextLength();
+  if (tw > fieldR - fieldL) {
+    const k = (fieldR - fieldL) / tw;
+    t1.setAttribute("font-size", 42 * k); t2.setAttribute("font-size", 54 * k);
+  }
+
+  // ---- strip geometry ----
+  const LX = 400;
+  const longest = Math.max(...stops.map(s => s.name.length));
+  const lastLen = stops[n - 1].name.length;
+  const y = 340, bandH = 42, barY = y + bandH + 6, barH = 25;
+  // font size: limited by spacing, and by the room between the header rule and the band
+  const roomUp = y - 100;
+  const approxStep = (1740 - LX) / Math.max(n - 1, 1);
+  const fs = Math.max(11, Math.min(24, approxStep * 0.75, roomUp / (longest * 0.68 * 0.7071 + 0.6)));
+  const lastDx = lastLen * fs * 0.68 * 0.7071 + 14;
+  const LX_END = Math.min(1740, PW - 14 - lastDx);                      // keep the last label inside the panel
+  const step = Math.max(20, Math.min(94, (LX_END - LX) / Math.max(n - 1, 1)));
+  const lastX = LX + step * (n - 1);
+  const rise = Math.ceil(longest * fs * 0.68 * 0.7071) + 14;
+
+  // red-ish band: dots on the top half, minutes on the bottom half
+  svg.appendChild(el("rect", { x: LX - 12, y, width: lastX - LX + 24, height: bandH, rx: 3, fill: accent }));
+  const r = Math.min(8, step * 0.3), mfs = Math.min(14, step * 0.5);
+  stops.forEach((s, i) => {
+    const x = LX + i * step;
+    const passed = i < cur, isCur = i === cur, isLast = i === n - 1;
+    const g = el("g", { class: "stop", tabindex: 0 });
+    g.appendChild(el("rect", { x: x - step / 2, y: y - rise, width: step, height: rise + bandH, fill: "transparent" }));
+    g.appendChild(el("circle", { cx: x, cy: y + 13, r, fill: passed ? "#d9a8d6" : "#fff" }));
+    g.appendChild(el("circle", { cx: x, cy: y + 13, r: r * 0.42, fill: "#3d0039" }));
+    if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#fff" }, s.minutes));
+    g.appendChild(el("text", {
+      transform: `translate(${x + 2},${y - 8}) rotate(-45)`, "font-size": fs,
+      "font-weight": isCur || isLast ? 700 : 400,
+      fill: isCur ? accent : passed ? "#8f8f8f" : "#1a1a1a"
+    }, s.name.toUpperCase()));
+    g.addEventListener("click", () => { current.stop = i; render(); });
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { current.stop = i; render(); } });
+    svg.appendChild(g);
+  });
+
+  // ---- district bar: consecutive stops in one district share a segment ----
+  if (stops.some(s => s.district)) {
+    const half = step / 2;
+    let i = 0;
+    while (i < n) {
+      let j = i;
+      while (j + 1 < n && stops[j + 1].district === stops[i].district) j++;
+      const x1 = LX + i * step - (i === 0 ? 12 : half - 1.5), x2 = LX + j * step + (j === n - 1 ? 12 : half - 1.5);
+      svg.appendChild(el("rect", { x: x1, y: barY, width: x2 - x1, height: barH, fill: DISTRICT_COLOR }));
+      if (stops[i].district) {
+        const label = el("text", { x: (x1 + x2) / 2, y: barY + 18, "font-size": 16, "font-weight": 700, "text-anchor": "middle", fill: "#fff" }, stops[i].district);
+        svg.appendChild(label);
+        const lw = label.getComputedTextLength();
+        if (lw > x2 - x1 - 8) label.setAttribute("font-size", 16 * (x2 - x1 - 8) / lw);
+      }
+      i = j + 1;
+    }
+  }
+
+  // ---- landmarks / streets: thin slanted lines under the district bar ----
+  stops.forEach((s, i) => {
+    if (!s.poi) return;
+    const x = LX + i * step, y0 = barY + barH + 3;
+    svg.appendChild(el("line", { x1: x, y1: y0, x2: x - 40, y2: y0 + 92, stroke: "#555", "stroke-width": 1 }));
+    svg.appendChild(el("text", {
+      transform: `translate(${x - 45},${y0 + 92}) rotate(-67)`, "font-size": 14, "font-style": "italic", fill: "#333"
+    }, s.poi));
+  });
+}
+
+function fitClock() {
+  if (!clockNode) return;
+  clockNode.setAttribute("font-size", 20);
+  const w = clockNode.getComputedTextLength();
+  if (w > 196) clockNode.setAttribute("font-size", 20 * 196 / w);
+}
+
+function fillDirections() {
+  const sel = $("dir");
+  sel.replaceChildren();
+  current.line.directions.forEach((d, i) => sel.add(new Option(d.name, i)));
+  sel.value = current.dir;
+}
+
+function openLine(id, dir = 0) {
+  const line = DATA.lines.find(l => l.line.toLowerCase() === String(id).toLowerCase());
+  if (!line) return false;
+  current = { line, dir: Math.min(dir, line.directions.length - 1), stop: 0 };
+  $("q").value = line.line;
+  fillDirections();
+  render();
+  history.replaceState(null, "", `#${encodeURIComponent(line.line)}/${current.dir}`);
+  return true;
+}
+
+function fillLineList() {
+  const t = $("type").value;
+  const dl = $("lines");
+  dl.replaceChildren();
+  DATA.lines.filter(l => !t || l.type === t).forEach(l => dl.appendChild(new Option(`${l.line} — ${l.directions[0].name}`, l.line)));
+}
+
+async function init() {
+  setInterval(() => { if (clockNode) { clockNode.textContent = clockText(); fitClock(); } }, 15000);
+  try {
+    DATA = await (await fetch("data/lines.json")).json();
+  } catch (e) {
+    $("display").outerHTML = "<p class='note'>Nie udało się wczytać data/lines.json (uruchom serwer, np. python -m http.server).</p>";
+    return;
+  }
+  try {
+    await Promise.all(["300", "400", "700", "900", "italic 400"].map(w => document.fonts.load(`${w} 20px Frutiger`)));
+  } catch (e) { /* fall back to system fonts */ }
+  [...new Set(DATA.lines.map(l => l.type))].forEach(t => $("type").add(new Option(t, t)));
+  fillLineList();
+
+  $("q").addEventListener("change", () => { if (!openLine($("q").value.trim())) $("q").select(); });
+  $("dir").addEventListener("change", () => openLine(current.line.line, +$("dir").value));
+  $("type").addEventListener("change", fillLineList);
+
+  const [h, d] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (!(h && openLine(h, +d || 0))) openLine(DATA.lines.find(l => l.line === "256") ? "256" : DATA.lines[0].line);
+}
+init();
+</script>
+</body>
+</html>
