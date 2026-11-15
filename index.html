@@ -87,7 +87,8 @@ function nextLabelText() {
   const l = NEXT_LABELS[nextLabelIdx];
   return l.text + (nextOnRequest ? l.req : "") + ": ";
 }
-let nextNode = null, nextT1 = null, nextT2 = null, nextField = { l: 0, r: 0 };
+let nextNode = null, nextT1 = null, nextT2 = null, nextField = { l: 0, r: 0 }, nextClipRect = null;
+let marqueeRAF = 0, marqueeGen = 0;      // scrolling of an over-long "next stop" text (see fitNext)
 
 function el(name, attrs = {}, text) {
   const n = document.createElementNS(SVGNS, name);
@@ -178,6 +179,9 @@ function render() {
   const clip = el("clipPath", { id: "wcBadgeClip" });
   clip.appendChild(el("rect", { width: 24, height: 24, rx: 5 }));
   defs.appendChild(clip);
+  const nclip = el("clipPath", { id: "nextClip" });
+  nextClipRect = nclip.appendChild(el("rect", { x: 0, y: 0, width: PW, height: 76 }));
+  defs.appendChild(nclip);
   svg.appendChild(defs);
 
   // ---- line number inside the (empty) number box of the backdrop ----
@@ -242,12 +246,13 @@ function render() {
 
   // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) together with the connections ----
   const fieldL = 372, fieldR = 1902;
+  const nextG = svg.appendChild(el("g", { "clip-path": "url(#nextClip)" }));
   nextNode = el("text", { x: fieldL, y: 64, fill: "#1a1a1a" });
   nextOnRequest = !!stops[cur].onRequest;
   nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, nextLabelText());
   nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
   nextNode.append(nextT1, nextT2);
-  svg.appendChild(nextNode);
+  nextG.appendChild(nextNode);
   nextField = { l: fieldL, r: fieldR };                       // the text must leave room for the connections (fitNext)
   fitNext();
 
@@ -319,41 +324,91 @@ function render() {
     }
   }
 
-  // ---- landmarks / streets: thin slanted lines under the district bar ----
-  // a stop's own landmark ("poi") wins; otherwise its street is printed where the route turns onto a new street
-  const labels = [];
+  // ---- streets: each name sits between two thin slanted lines, centred in the span of stops on that street ----
+  // A stop's own landmark ("poi") wins over its street. Stops without a street carry the previous one on, and
+  // loops ("Pętla ...") are never printed (they are not shown on the real displays).
+  const isLoop = name => /(^|[^\p{L}])p[eę]t[lł]a([^\p{L}]|$)/iu.test(name);
+  const keys = [];
   let prevStreet = "";
   stops.forEach(s => {
-    const st = s.street || "";
-    labels.push(s.poi || (st && st !== prevStreet ? st : ""));
-    if (st) prevStreet = st;
+    if (s.poi) { keys.push("p:" + s.poi); return; }
+    const st = (s.street || "").trim();
+    if (st && !isLoop(st)) prevStreet = "s:" + st;
+    keys.push(prevStreet);
   });
-  stops.forEach((s, i) => {
-    if (!labels[i]) return;
-    const x = LX + i * step, y0 = barY + barH + 3;
-    svg.appendChild(el("line", { x1: x, y1: y0, x2: x - 40, y2: y0 + 92, stroke: "#555", "stroke-width": 1 }));
-    svg.appendChild(el("text", {
-      transform: `translate(${x - 45},${y0 + 92}) rotate(-67)`, "font-size": 14, "font-style": "italic", fill: "#333"
-    }, labels[i]));
-  });
+  const y0 = barY + barH + 3, SLANT_DX = -40, SLANT_DY = 92;
+  const drawnLines = new Set();
+  const slantLine = x => {
+    if (drawnLines.has(Math.round(x))) return;
+    drawnLines.add(Math.round(x));
+    svg.appendChild(el("line", { x1: x, y1: y0, x2: x + SLANT_DX, y2: y0 + SLANT_DY, stroke: "#555", "stroke-width": 1 }));
+  };
+  for (let i = 0; i < n;) {
+    let j = i;
+    while (j + 1 < n && keys[j + 1] === keys[i]) j++;
+    if (keys[i]) {
+      const xL = LX + i * step, xR = LX + (j + 1) * step, xm = (xL + xR) / 2;
+      slantLine(xL); slantLine(xR);
+      svg.appendChild(el("text", {
+        transform: `translate(${xm + SLANT_DX},${y0 + SLANT_DY}) rotate(-67)`, dy: ".35em",
+        "font-size": Math.max(9, Math.min(14, (xR - xL) * 0.85)), "font-style": "italic", fill: "#333"
+      }, keys[i].slice(2)));
+    }
+    i = j + 1;
+  }
 }
 
-// shrink the "next stop" line only if it is wider than the space left beside the connections,
-// then centre text + connections together in the field
+// The "next stop" text keeps its size. If it is wider than the space left beside the connections it is shown in a
+// window and scrolls to its end and back (pausing at both ends); otherwise text + connections are centred together.
+function setNextClip(x, w) {
+  if (nextClipRect) { nextClipRect.setAttribute("x", x); nextClipRect.setAttribute("width", Math.max(0, w)); }
+}
+
+function stopMarquee() {
+  cancelAnimationFrame(marqueeRAF);
+  marqueeGen++;
+}
+
+function startMarquee(dist) {
+  stopMarquee();
+  const gen = marqueeGen, SPEED = 90, PAUSE = 1600;          // SPEED in panel pixels per second
+  const move = dist / SPEED * 1000, total = 2 * (PAUSE + move);
+  let t0 = null;
+  const frame = ts => {
+    if (gen !== marqueeGen || !nextNode) return;
+    if (t0 === null) t0 = ts;
+    const t = (ts - t0) % total;
+    let off;
+    if (t < PAUSE) off = 0;
+    else if (t < PAUSE + move) off = (t - PAUSE) / move * dist;
+    else if (t < 2 * PAUSE + move) off = dist;
+    else off = dist - (t - 2 * PAUSE - move) / move * dist;
+    nextNode.setAttribute("transform", `translate(${-off},0)`);
+    marqueeRAF = requestAnimationFrame(frame);
+  };
+  marqueeRAF = requestAnimationFrame(frame);
+}
+
 function fitNext() {
   if (!nextNode) return;
+  stopMarquee();
+  nextNode.removeAttribute("transform");
   nextT1.setAttribute("font-size", 42); nextT2.setAttribute("font-size", 54);
   const extra = connW ? CONN_GAP + connW : 0;
   const full = nextField.r - nextField.l;
-  let tw = nextNode.getComputedTextLength();
-  if (tw > full - extra) {
-    const k = (full - extra) / tw;
-    nextT1.setAttribute("font-size", 42 * k); nextT2.setAttribute("font-size", 54 * k);
-    tw = nextNode.getComputedTextLength();
+  const avail = full - extra;
+  const tw = nextNode.getComputedTextLength();
+  if (tw > avail) {
+    nextNode.setAttribute("x", nextField.l);
+    setNextClip(nextField.l, avail);
+    if (connNode) connNode.setAttribute("transform", `translate(${nextField.l + avail + CONN_GAP},0)`);
+    startMarquee(tw - avail);
+  } else {
+    const start = nextField.l + (full - tw - extra) / 2;
+    nextNode.setAttribute("x", start);
+    setNextClip(nextField.l - 20, full + 40);
+    if (connNode) connNode.setAttribute("transform", `translate(${start + tw + CONN_GAP},0)`);
   }
-  const start = nextField.l + (full - tw - extra) / 2;
-  nextNode.setAttribute("x", start);
-  if (connNode) connNode.setAttribute("transform", `translate(${start + tw + CONN_GAP},0)`);
 }
 
 function toggleNextLabel() {
