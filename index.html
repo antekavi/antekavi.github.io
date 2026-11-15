@@ -208,7 +208,7 @@ function render() {
 
   // thin purple bar with the stop circles on it; the minutes sit in their own row below it
   const lineH = 8, cy = y + 9;
-  svg.appendChild(el("rect", { x: LX - 12, y: cy - lineH / 2, width: lastX - LX + 24, height: lineH, rx: lineH / 2, fill: accent }));
+  svg.appendChild(el("rect", { x: LX, y: cy - lineH / 2, width: lastX - LX, height: lineH, fill: accent }));   // ends at the first/last circle centres, so nothing sticks out
   const r = Math.min(8, step * 0.3), mfs = Math.min(14, step * 0.5);
   stops.forEach((s, i) => {
     const x = LX + i * step;
