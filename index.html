@@ -27,6 +27,7 @@
   svg#display { display: block; width: 100%; height: auto; }
   svg text { font-family: "Frutiger", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
   .stop, .conn { cursor: pointer; }
+  .stop:focus, .stop:focus-visible { outline: none; }   /* no focus box around a clicked stop */
   .note { margin: 12px 16px 24px; font-size: 12px; color: var(--muted); }
   .note code { color: var(--ink); }
 </style>
@@ -317,6 +318,18 @@ function fillLineList() {
   DATA.lines.filter(l => !t || l.type === t).forEach(l => dl.appendChild(new Option(`${l.line} — ${l.directions[0].name}`, l.line)));
 }
 
+// Left / Right arrow keys move the selected ("next") stop; ignored while typing in the controls
+document.addEventListener("keydown", e => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) || !current.line) return;
+  const n = (current.line.directions[current.dir] || current.line.directions[0]).stops.length;
+  const cur = Math.min(current.stop, n - 1);
+  const next = Math.max(0, Math.min(n - 1, cur + (e.key === "ArrowRight" ? 1 : -1)));
+  e.preventDefault();                                                       // don't scroll the strip sideways
+  if (next !== cur) { current.stop = next; render(); }
+});
+
 async function init() {
   setInterval(toggleNextLabel, NEXT_LABEL_MS);
   setInterval(() => { if (clockNode) { clockNode.textContent = clockText(); fitClock(); } }, 15000);
@@ -332,8 +345,9 @@ async function init() {
   [...new Set(DATA.lines.map(l => l.type))].forEach(t => $("type").add(new Option(t, t)));
   fillLineList();
 
-  $("q").addEventListener("change", () => { if (!openLine($("q").value.trim())) $("q").select(); });
-  $("dir").addEventListener("change", () => openLine(current.line.line, +$("dir").value));
+  // after choosing a line / direction, give up focus so the arrow keys move the stop again
+  $("q").addEventListener("change", () => { if (openLine($("q").value.trim())) $("q").blur(); else $("q").select(); });
+  $("dir").addEventListener("change", () => { openLine(current.line.line, +$("dir").value); $("dir").blur(); });
   $("type").addEventListener("change", fillLineList);
 
   const [h, d] = decodeURIComponent(location.hash.slice(1)).split("/");
