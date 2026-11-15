@@ -63,9 +63,17 @@ let DATA = { lines: [] };
 let current = { line: null, dir: 0, stop: 0 };
 let clockNode = null;
 // "next stop" label: alternates Polish / English every NEXT_LABEL_MS
-const NEXT_LABELS = ["NASTĘPNY PRZYSTANEK: ", "NEXT STOP: "];
+// `req` is inserted after the label when the selected stop is "na żądanie" (on request)
+const NEXT_LABELS = [
+  { text: "NASTĘPNY PRZYSTANEK", req: " (Ż)" },
+  { text: "NEXT STOP", req: " (ON REQUEST)" }
+];
 const NEXT_LABEL_MS = 10000;
-let nextLabelIdx = 0;
+let nextLabelIdx = 0, nextOnRequest = false;
+function nextLabelText() {
+  const l = NEXT_LABELS[nextLabelIdx];
+  return l.text + (nextOnRequest ? l.req : "") + ": ";
+}
 let nextNode = null, nextT1 = null, nextT2 = null, nextField = { l: 0, r: 0 };
 
 function el(name, attrs = {}, text) {
@@ -181,7 +189,8 @@ function render() {
   // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) ----
   const fieldL = 372, fieldR = groups.length ? connX - 30 : 1902;
   nextNode = el("text", { x: (fieldL + fieldR) / 2, y: 64, "text-anchor": "middle", fill: "#1a1a1a" });
-  nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, NEXT_LABELS[nextLabelIdx]);
+  nextOnRequest = !!stops[cur].onRequest;
+  nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, nextLabelText());
   nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
   nextNode.append(nextT1, nextT2);
   svg.appendChild(nextNode);
@@ -282,7 +291,7 @@ function fitNext() {
 function toggleNextLabel() {
   nextLabelIdx = (nextLabelIdx + 1) % NEXT_LABELS.length;
   if (!nextT1) return;
-  nextT1.textContent = NEXT_LABELS[nextLabelIdx];
+  nextT1.textContent = nextLabelText();
   fitNext();
 }
 
