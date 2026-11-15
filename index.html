@@ -57,6 +57,7 @@ const DISTRICT_COLOR = "#e03a45";
 const BUS_RED = "#ff0000";
 const BUS_ICON = "img/bus.png";           // red round bus icon shown for bus connections
 const CONN_ICON = 34;                     // diameter of the round connection icons
+const CONN_FS = 20;                       // font size of the connection line numbers (regular weight)
 const CONN_PER_ROW = 6;                   // line numbers per row next to an icon
 const CONN_GAP = 26;                      // space between the "next stop" text and the connections
 const TYPE_COLORS = { bus: "#88007e", tram: "#e8730c", metro: "#1d5fb5", train: "#2b8a57", trolleybus: "#7a5a12" };
@@ -126,6 +127,17 @@ function wheelchairBadge(cx, cy, size, kind) {
   return g;
 }
 
+// half the height of the digits at font size `fs`, so a baseline of (centre + half) centres them vertically
+function digitHalfHeight(fs) {
+  try {
+    const c = document.createElement("canvas").getContext("2d");
+    c.font = `400 ${fs}px Frutiger, "Segoe UI", Arial, sans-serif`;
+    const m = c.measureText("0123456789");
+    if (m.actualBoundingBoxAscent) return (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+  } catch (e) { /* fall through */ }
+  return fs * 0.35;
+}
+
 // Round red tram icon (same look as img/bus.png), centred on (cx, cy), diameter d
 function tramIcon(cx, cy, d) {
   const g = el("g", { transform: `translate(${cx - d / 2},${cy - d / 2}) scale(${d / 50})` });
@@ -172,6 +184,7 @@ function render() {
   // ---- header: connections of the selected stop; the "next stop" text and the connections are centred together (see fitNext) ----
   const conns = stops[cur].connections;
   const groups = TYPE_ORDER.map(t => ({ type: t, items: conns.filter(c => c.type === t) })).filter(g => g.items.length);
+  const numHalf = digitHalfHeight(CONN_FS);
   const CY = 45;                                              // vertical centre of the connections, level with the "next stop" text
   connNode = svg.appendChild(el("g"));
   connW = 0;
@@ -204,16 +217,16 @@ function render() {
         const rowY = CY + (r - (rows - 1) / 2) * 27;
         shown.slice(r * CONN_PER_ROW, (r + 1) * CONN_PER_ROW).forEach(c => {
           const cg = el("g", { class: "conn" });
-          const t = el("text", { x: tx, y: rowY + 8, "font-size": 22, "font-weight": 700, fill: "#555" }, c.line);
+          const t = el("text", { x: tx, y: rowY + numHalf, "font-size": CONN_FS, "font-weight": 400, fill: "#444" }, c.line);
           cg.appendChild(t);
           cg.appendChild(el("title", {}, `${c.line} (${c.type})`));
           connNode.appendChild(cg);
           const w = t.getComputedTextLength();
           cg.insertBefore(el("rect", { x: tx - 4, y: rowY - 13, width: w + 8, height: 26, fill: "transparent" }), t);
           cg.addEventListener("click", () => openLine(c.line));
-          tx += w + 11;
+          tx += w + 14;
         });
-        maxEnd = Math.max(maxEnd, tx - 11);
+        maxEnd = Math.max(maxEnd, tx - 14);
       }
       bx = maxEnd + 24;
     });
