@@ -80,6 +80,37 @@ function clockText() {
   return `${p(d.getHours())}:${p(d.getMinutes())} ${days[d.getDay()]} ${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
+// Stop flags in data/lines.json (both optional):
+//   onRequest: true                 -> "na żądanie": circle without the inner dot
+//   wheelchair: "none" | "partial"  -> red badge / blue+red badge next to the stop name (absent = accessible, no badge)
+const WC_TITLE = {
+  none: "Przystanek niedostosowany dla osób na wózkach",
+  partial: "Przystanek częściowo dostosowany dla osób na wózkach"
+};
+
+// Square wheelchair badge drawn in a 24x24 box, centred on (cx, cy) and scaled to `size`.
+function wheelchairBadge(cx, cy, size, kind) {
+  const g = el("g", { transform: `translate(${cx - size / 2},${cy - size / 2}) scale(${size / 24})` });
+  if (kind === "partial") {
+    // blue badge with the lower-right half red
+    g.appendChild(el("rect", { width: 24, height: 24, rx: 5, fill: "#1d5fb5" }));
+    const red = el("g", { "clip-path": "url(#wcBadgeClip)" });
+    red.appendChild(el("path", { d: "M24,0 V24 H0 Z", fill: "#d4202c" }));
+    g.appendChild(red);
+  } else {
+    g.appendChild(el("rect", { width: 24, height: 24, rx: 5, fill: "#d4202c" }));
+  }
+  g.appendChild(el("rect", { x: 0.75, y: 0.75, width: 22.5, height: 22.5, rx: 4.5, fill: "none", stroke: "#fff", "stroke-width": 1.5 }));
+  // pictogram: head, back + seat + leg, arm, wheel
+  const w = { fill: "none", stroke: "#fff", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" };
+  g.appendChild(el("circle", { cx: 10, cy: 5.2, r: 1.9, fill: "#fff" }));
+  g.appendChild(el("path", { ...w, d: "M10 8.6 V14.2 H15.4 L17.6 19.2" }));
+  g.appendChild(el("path", { ...w, d: "M10 11.2 H14.6" }));
+  g.appendChild(el("path", { ...w, d: "M6.9 11.6 A5.4 5.4 0 1 0 14.4 18.6" }));
+  g.appendChild(el("title", {}, WC_TITLE[kind]));
+  return g;
+}
+
 function render() {
   const line = current.line;
   if (!line) return;
@@ -95,6 +126,11 @@ function render() {
   svg.setAttribute("viewBox", `0 0 ${PW} ${PH}`);
   svg.style.minWidth = "760px";
   svg.appendChild(el("image", { href: bd.img, x: 0, y: 0, width: PW, height: PH }));
+  const defs = el("defs");
+  const clip = el("clipPath", { id: "wcBadgeClip" });
+  clip.appendChild(el("rect", { width: 24, height: 24, rx: 5 }));
+  defs.appendChild(clip);
+  svg.appendChild(defs);
 
   // ---- line number inside the (empty) number box of the backdrop ----
   svg.appendChild(el("text", { x: 253.5, y: 101, "font-size": line.line.length > 3 ? 62 : 86, "font-weight": 700, fill: "#1a1a1a", "text-anchor": "middle" }, line.line));
@@ -156,34 +192,51 @@ function render() {
   const lastLen = stops[n - 1].name.length;
   const y = 340, bandH = 42, barY = y + bandH + 6, barH = 25;
   // font size: limited by spacing, and by the room between the header rule and the band
+  const BADGE = 22, BADGE_GAP = 5;                                        // wheelchair badge size / gap after the label
+  const hasBadge = s => s.wheelchair === "none" || s.wheelchair === "partial";
   const roomUp = y - 100;
   const approxStep = (1740 - LX) / Math.max(n - 1, 1);
-  const fs = Math.max(11, Math.min(24, approxStep * 0.75, roomUp / (longest * 0.68 * 0.7071 + 0.6)));
+  // each label may only grow until its top end (plus its badge, if any) reaches the header rule
+  const fitFs = Math.min(...stops.map(s => (roomUp - (hasBadge(s) ? BADGE + BADGE_GAP : 0)) / (s.name.length * 0.68 * 0.7071 + 0.6)));
+  const fs = Math.max(11, Math.min(24, approxStep * 0.75, fitFs));
   const lastDx = lastLen * fs * 0.68 * 0.7071 + 14;
   const LX_END = Math.min(1740, PW - 14 - lastDx);                      // keep the last label inside the panel
   const step = Math.max(20, Math.min(94, (LX_END - LX) / Math.max(n - 1, 1)));
   const lastX = LX + step * (n - 1);
   const rise = Math.ceil(longest * fs * 0.68 * 0.7071) + 14;
 
-  // red-ish band: dots on the top half, minutes on the bottom half
-  svg.appendChild(el("rect", { x: LX - 12, y, width: lastX - LX + 24, height: bandH, rx: 3, fill: accent }));
+  // thin purple bar with the stop circles on it; the minutes sit in their own row below it
+  const lineH = 8, cy = y + 9;
+  svg.appendChild(el("rect", { x: LX - 12, y: cy - lineH / 2, width: lastX - LX + 24, height: lineH, rx: lineH / 2, fill: accent }));
   const r = Math.min(8, step * 0.3), mfs = Math.min(14, step * 0.5);
+  for (let i = 0; i < n - 1; i++) {                                        // thin dividers between the minute cells
+    const dx = LX + i * step + step / 2;
+    svg.appendChild(el("line", { x1: dx, y1: y + 24, x2: dx, y2: y + bandH + 1, stroke: "#c4c4c4", "stroke-width": 1 }));
+  }
   stops.forEach((s, i) => {
     const x = LX + i * step;
     const passed = i < cur, isCur = i === cur, isLast = i === n - 1;
     const g = el("g", { class: "stop", tabindex: 0 });
     g.appendChild(el("rect", { x: x - step / 2, y: y - rise, width: step, height: rise + bandH, fill: "transparent" }));
-    g.appendChild(el("circle", { cx: x, cy: y + 13, r, fill: passed ? "#d9a8d6" : "#fff" }));
-    g.appendChild(el("circle", { cx: x, cy: y + 13, r: r * 0.42, fill: "#3d0039" }));
-    if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#fff" }, s.minutes));
-    g.appendChild(el("text", {
-      transform: `translate(${x + 2},${y - 8}) rotate(-45)`, "font-size": fs,
+    g.appendChild(el("circle", { cx: x, cy, r, fill: passed ? "#d9a8d6" : "#fff", stroke: "#3d0039", "stroke-width": 2.5 }));
+    if (!s.onRequest) g.appendChild(el("circle", { cx: x, cy, r: r * 0.42, fill: "#3d0039" }));   // on-request stops: empty circle
+    if (s.onRequest) g.appendChild(el("title", {}, `${s.name} (na żądanie)`));
+    if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#555" }, s.minutes));
+    const label = el("text", {
+      transform: `translate(${x + 2},${y - 10}) rotate(-45)`, "font-size": fs,
       "font-weight": isCur || isLast ? 700 : 400,
       fill: isCur ? accent : passed ? "#8f8f8f" : "#1a1a1a"
-    }, s.name.toUpperCase()));
+    }, s.name.toUpperCase());
+    g.appendChild(label);
+    svg.appendChild(g);
+    if (hasBadge(s)) {
+      // badge continues the label's direction, just past its upper end, centred on the text height
+      const L = label.getComputedTextLength(), k = 0.7071;
+      const d = L + BADGE_GAP + BADGE / 2, up = fs * 0.33;
+      g.appendChild(wheelchairBadge(x + 2 + k * d - k * up, y - 10 - k * d - k * up, BADGE, s.wheelchair));
+    }
     g.addEventListener("click", () => { current.stop = i; render(); });
     g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { current.stop = i; render(); } });
-    svg.appendChild(g);
   });
 
   // ---- district bar: consecutive stops in one district share a segment ----

@@ -1,21 +1,21 @@
-stop_name,district,poi
-Metro Kondratowicza,Bródno,
-Knapika,Bródno,
-Małborska,Targówek,Park
-CH Targówek,Targówek,
-Jesiennych Liści,Targówek,
-Podwojna,Targówek,
-Sieczna,Białołęka,Szkoła
-Okrągła,Białołęka,
-Grodzisk-Kościół,Białołęka,Kościół
-Grodzisk,Białołęka,
-Internetowa,Białołęka,
-Os. Lewandów II,Białołęka,Poczta
-Oknicka,Białołęka,
-Chudoby,Białołęka,
-Zaułek-Szkoła,Białołęka,
-Rondo Daszyńskiego,Wola,
-Centrum Nauki Kopernik,Śródmieście,
-Dworzec Wileński,Praga-Północ,
-Targówek Mieszkaniowy,Targówek,
-Bródno,Bródno,
+stop_name,district,poi,on_request,wheelchair
+Metro Kondratowicza,Bródno,,,
+Knapika,Bródno,,,none
+Małborska,Targówek,Park,1,
+CH Targówek,Targówek,,,
+Jesiennych Liści,Targówek,,,
+Podwojna,Targówek,,1,
+Sieczna,Białołęka,Szkoła,,
+Okrągła,Białołęka,,1,none
+Grodzisk-Kościół,Białołęka,Kościół,,partial
+Grodzisk,Białołęka,,,
+Internetowa,Białołęka,,1,
+Os. Lewandów II,Białołęka,Poczta,,
+Oknicka,Białołęka,,,partial
+Chudoby,Białołęka,,1,
+Zaułek-Szkoła,Białołęka,,,
+Rondo Daszyńskiego,Wola,,,
+Centrum Nauki Kopernik,Śródmieście,,,
+Dworzec Wileński,Praga-Północ,,,
+Targówek Mieszkaniowy,Targówek,,,
+Bródno,Bródno,,,

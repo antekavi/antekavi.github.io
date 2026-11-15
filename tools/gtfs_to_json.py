@@ -3,9 +3,13 @@
 
 Usage:  python3 tools/gtfs_to_json.py path/to/gtfs.zip data/lines.json [districts.csv]
 
-districts.csv (optional) has the header "stop_name,district[,poi]"; it fills the
-district bar under the line (and optional landmarks below it). GTFS itself has
-no district data.
+districts.csv (optional) has the header "stop_name,district[,poi,on_request,wheelchair]";
+it fills the district bar under the line (and optional landmarks below it). GTFS
+itself has no district data.
+  on_request  1/yes/true -> stop is "na żądanie" (drawn as a circle without the inner dot)
+  wheelchair  none | partial | full -> red / blue+red / no wheelchair icon
+Without those columns the converter falls back to GTFS: wheelchair_boarding=2 in
+stops.txt -> "none", and pickup_type or drop_off_type = 3 in stop_times.txt -> on request.
 
 Standard library only. For every route and direction it picks the most common
 stop pattern (so short-turn variants don't win), takes stop order from
@@ -43,23 +47,34 @@ def main(src, dst, districts_csv=None):
 
     # optional: CSV with header "stop_name,district" -> shown in the red district bar
     # optional extra column "poi": a landmark printed diagonally under the district bar
-    districts, pois = {}, {}
+    districts, pois, on_request_csv, wheelchair_csv = {}, {}, {}, {}
     if districts_csv:
         with open(districts_csv, encoding="utf-8-sig", newline="") as fh:
             for r in csv.DictReader(fh):
                 districts[r["stop_name"].strip()] = (r.get("district") or "").strip()
                 pois[r["stop_name"].strip()] = (r.get("poi") or "").strip()
+                flag = (r.get("on_request") or "").strip().lower()
+                if flag:
+                    on_request_csv[r["stop_name"].strip()] = flag in ("1", "yes", "true", "tak")
+                wc = (r.get("wheelchair") or "").strip().lower()
+                if wc:
+                    wheelchair_csv[r["stop_name"].strip()] = wc
 
     routes = {r["route_id"]: r for r in rows(zf, "routes.txt")}
-    stops = {s["stop_id"]: s["stop_name"].strip() for s in rows(zf, "stops.txt")}
+    stops, wheelchair_gtfs = {}, {}
+    for s in rows(zf, "stops.txt"):
+        stops[s["stop_id"]] = s["stop_name"].strip()
+        if (s.get("wheelchair_boarding") or "").strip() == "2":
+            wheelchair_gtfs[s["stop_id"]] = "none"
     trips = {t["trip_id"]: (t["route_id"], t.get("direction_id") or "0") for t in rows(zf, "trips.txt")}
 
-    # trip_id -> [(sequence, stop_id, minutes)]
+    # trip_id -> [(sequence, stop_id, minutes, on_request)]
     per_trip = defaultdict(list)
     for st in rows(zf, "stop_times.txt"):
         if st["trip_id"] in trips:
             t = st["arrival_time"] or st["departure_time"]
-            per_trip[st["trip_id"]].append((int(st["stop_sequence"]), st["stop_id"], to_minutes(t) if t else None))
+            req = "3" in ((st.get("pickup_type") or "").strip(), (st.get("drop_off_type") or "").strip())
+            per_trip[st["trip_id"]].append((int(st["stop_sequence"]), st["stop_id"], to_minutes(t) if t else None, req))
 
     # (route, direction) -> Counter of stop_id patterns, plus one example trip per pattern
     patterns = defaultdict(Counter)
@@ -67,7 +82,7 @@ def main(src, dst, districts_csv=None):
     for trip_id, seq in per_trip.items():
         seq.sort()
         key = trips[trip_id]
-        pattern = tuple(s for _, s, _ in seq)
+        pattern = tuple(s for _, s, _, _ in seq)
         patterns[key][pattern] += 1
         example.setdefault((key, pattern), seq)
 
@@ -97,19 +112,26 @@ def main(src, dst, districts_csv=None):
             seq = example[((route_id, direction), pattern)]
             t0 = seq[0][2]
             stop_list = []
-            for _, sid, minutes in seq:
+            for _, sid, minutes, req in seq:
                 name = stops.get(sid, sid)
                 conns = {(route_info(r)["line"], route_info(r)["type"])
                          for r in served[name] if r != route_id}
                 order = {"metro": 0, "train": 1, "tram": 2, "trolleybus": 3, "bus": 4}
                 conns = sorted(conns, key=lambda c: (order.get(c[1], 9), natural_key(c[0])))
-                stop_list.append({
+                stop = {
                     "name": name,
                     "district": districts.get(name, ""),
                     "poi": pois.get(name, ""),
                     "minutes": round(minutes - t0) if minutes is not None and t0 is not None else None,
                     "connections": [{"line": l, "type": t} for l, t in conns],
-                })
+                }
+                # optional flags, written only when set (the CSV wins over GTFS)
+                if on_request_csv.get(name, req):
+                    stop["onRequest"] = True
+                wc = wheelchair_csv.get(name, wheelchair_gtfs.get(sid))
+                if wc in ("none", "partial"):
+                    stop["wheelchair"] = wc
+                stop_list.append(stop)
             directions.append({"name": "→ " + stop_list[-1]["name"], "stops": stop_list})
         out.append({"line": info["line"], "type": info["type"], "directions": directions})
 
