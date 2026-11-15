@@ -41,7 +41,7 @@
 </div>
 
 <div class="wrap"><svg id="display" role="img" aria-label="Schemat linii"></svg></div>
-<p class="note">Kliknij przystanek, żeby ustawić go jako „następny”. Przesiadki następnego przystanku są po prawej; kliknij numer linii, żeby ją otworzyć.
+<p class="note">Kliknij przystanek, żeby ustawić go jako „następny”. Przesiadki następnego przystanku są po prawej stronie nazwy; kliknij numer linii, żeby ją otworzyć.
   Tło: <code>img/zwykla.png</code>. Dane: <code>data/lines.json</code> (domyślnie dane demonstracyjne).</p>
 
 <script>
@@ -54,6 +54,9 @@ const BACKDROPS = {
   zwykla: { img: "img/zwykla.png", accent: "#88007e" },
 };
 const DISTRICT_COLOR = "#e03a45";
+// connection types shown with an image instead of the coloured text tag (w/h in backdrop pixels)
+const TYPE_ICONS = { bus: { img: "img/bus.png", w: 31, h: 36 } };
+const CONN_GAP = 40;                       // space between the "next stop" text and the connections
 const TYPE_COLORS = { bus: "#88007e", tram: "#e8730c", metro: "#1d5fb5", train: "#2b8a57", trolleybus: "#7a5a12" };
 const KIND = { bus: "bus", tram: "tram", metro: "M", train: "SKM", trolleybus: "trol" };
 const TYPE_ORDER = ["metro", "train", "tram", "trolleybus", "bus"];
@@ -61,7 +64,7 @@ const $ = id => document.getElementById(id);
 
 let DATA = { lines: [] };
 let current = { line: null, dir: 0, stop: 0 };
-let clockNode = null;
+let clockNode = null, connNode = null;
 // "next stop" label: alternates Polish / English every NEXT_LABEL_MS
 // `req` is inserted after the label when the selected stop is "na żądanie" (on request)
 const NEXT_LABELS = [
@@ -150,7 +153,7 @@ function render() {
   svg.appendChild(clockNode);
   fitClock();
 
-  // ---- header right: connections of the selected stop ----
+  // ---- header: connections of the selected stop (placed right after the "next stop" text, see fitNext) ----
   const conns = stops[cur].connections;
   const groups = TYPE_ORDER.map(t => ({ type: t, items: conns.filter(c => c.type === t) })).filter(g => g.items.length);
   groups.forEach(g => {
@@ -158,20 +161,26 @@ function render() {
     g.rows = Math.min(3, g.shown.length);
     g.cols = Math.ceil(g.shown.length / g.rows);
     g.cell = Math.max(...g.shown.map(c => c.line.length)) * 13 + 18;
-    g.tagW = KIND[g.type].length * 11 + 16;
+    g.icon = TYPE_ICONS[g.type];                                    // image instead of the text tag, where one is defined
+    g.tagW = g.icon ? g.icon.w : KIND[g.type].length * 11 + 16;
     g.w = g.tagW + 6 + g.cols * g.cell + 20;
   });
   const blockW = groups.length ? 66 + groups.reduce((a, g) => a + g.w, 0) : 0;
-  const connX = PW - 16 - blockW;
+  connNode = null;
   if (groups.length) {
-    let bx = connX;
-    svg.appendChild(el("path", { d: `M${bx + 6},38 H${bx + 48}`, stroke: "#d4202c", "stroke-width": 3 }));
-    svg.appendChild(el("path", { d: `M${bx},38 l10,-7 v14 z M${bx + 54},38 l-10,-7 v14 z`, fill: "#d4202c" }));
-    svg.appendChild(el("circle", { cx: bx + 27, cy: 38, r: 7, fill: "#efefef", stroke: "#d4202c", "stroke-width": 3 }));
+    connNode = el("g");
+    let bx = 0;
+    connNode.appendChild(el("path", { d: `M${bx + 6},38 H${bx + 48}`, stroke: "#d4202c", "stroke-width": 3 }));
+    connNode.appendChild(el("path", { d: `M${bx},38 l10,-7 v14 z M${bx + 54},38 l-10,-7 v14 z`, fill: "#d4202c" }));
+    connNode.appendChild(el("circle", { cx: bx + 27, cy: 38, r: 7, fill: "#efefef", stroke: "#d4202c", "stroke-width": 3 }));
     bx += 66;
     groups.forEach(g => {
-      svg.appendChild(el("rect", { x: bx, y: 8, width: g.tagW, height: 20, rx: 3, fill: TYPE_COLORS[g.type] }));
-      svg.appendChild(el("text", { x: bx + g.tagW / 2, y: 24, "font-size": 15, "font-weight": 700, fill: "#fff", "text-anchor": "middle" }, KIND[g.type]));
+      if (g.icon) {
+        connNode.appendChild(el("image", { href: g.icon.img, x: bx, y: 6, width: g.icon.w, height: g.icon.h }));
+      } else {
+        connNode.appendChild(el("rect", { x: bx, y: 8, width: g.tagW, height: 20, rx: 3, fill: TYPE_COLORS[g.type] }));
+        connNode.appendChild(el("text", { x: bx + g.tagW / 2, y: 24, "font-size": 15, "font-weight": 700, fill: "#fff", "text-anchor": "middle" }, KIND[g.type]));
+      }
       g.shown.forEach((c, k) => {
         const col = Math.floor(k / g.rows), row = k % g.rows;
         const tx = bx + g.tagW + 6 + col * g.cell;
@@ -180,21 +189,22 @@ function render() {
         cg.appendChild(el("text", { x: tx, y: 24 + row * 21, "font-size": 19, "font-weight": 400, fill: "#555" }, c.line));
         cg.appendChild(el("title", {}, `${c.line} (${c.type})`));
         cg.addEventListener("click", () => openLine(c.line));
-        svg.appendChild(cg);
+        connNode.appendChild(cg);
       });
       bx += g.w;
     });
+    svg.appendChild(connNode);
   }
 
-  // ---- header: next stop, centred above the backdrop's rule (x 364..1909, y 77) ----
-  const fieldL = 372, fieldR = groups.length ? connX - 30 : 1902;
-  nextNode = el("text", { x: (fieldL + fieldR) / 2, y: 64, "text-anchor": "middle", fill: "#1a1a1a" });
+  // ---- header: next stop, left-aligned at the backdrop's rule (x 364..1909, y 77); connections follow its right end ----
+  const fieldL = 372, fieldR = 1902;
+  nextNode = el("text", { x: fieldL, y: 64, fill: "#1a1a1a" });
   nextOnRequest = !!stops[cur].onRequest;
   nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, nextLabelText());
   nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
   nextNode.append(nextT1, nextT2);
   svg.appendChild(nextNode);
-  nextField = { l: fieldL, r: fieldR };
+  nextField = { l: fieldL, r: fieldR - (blockW ? blockW + CONN_GAP : 0) };   // the text must leave room for the connections
   fitNext();
 
   // ---- strip geometry ----
@@ -276,7 +286,7 @@ function render() {
   });
 }
 
-// shrink the "next stop" line only if it is wider than the space available
+// shrink the "next stop" line only if it is wider than the space available, then put the connections right after it
 function fitNext() {
   if (!nextNode) return;
   nextT1.setAttribute("font-size", 42); nextT2.setAttribute("font-size", 54);
@@ -286,6 +296,7 @@ function fitNext() {
     const k = room / tw;
     nextT1.setAttribute("font-size", 42 * k); nextT2.setAttribute("font-size", 54 * k);
   }
+  if (connNode) connNode.setAttribute("transform", `translate(${nextField.l + nextNode.getComputedTextLength() + CONN_GAP},0)`);
 }
 
 function toggleNextLabel() {
