@@ -210,19 +210,15 @@ function render() {
   const lineH = 8, cy = y + 9;
   svg.appendChild(el("rect", { x: LX - 12, y: cy - lineH / 2, width: lastX - LX + 24, height: lineH, rx: lineH / 2, fill: accent }));
   const r = Math.min(8, step * 0.3), mfs = Math.min(14, step * 0.5);
-  for (let i = 0; i < n - 1; i++) {                                        // thin dividers between the minute cells
-    const dx = LX + i * step + step / 2;
-    svg.appendChild(el("line", { x1: dx, y1: y + 24, x2: dx, y2: y + bandH + 1, stroke: "#c4c4c4", "stroke-width": 1 }));
-  }
   stops.forEach((s, i) => {
     const x = LX + i * step;
     const passed = i < cur, isCur = i === cur, isLast = i === n - 1;
     const g = el("g", { class: "stop", tabindex: 0 });
     g.appendChild(el("rect", { x: x - step / 2, y: y - rise, width: step, height: rise + bandH, fill: "transparent" }));
-    g.appendChild(el("circle", { cx: x, cy, r, fill: passed ? "#d9a8d6" : "#fff", stroke: "#3d0039", "stroke-width": 2.5 }));
-    if (!s.onRequest) g.appendChild(el("circle", { cx: x, cy, r: r * 0.42, fill: "#3d0039" }));   // on-request stops: empty circle
+    g.appendChild(el("circle", { cx: x, cy, r, fill: passed ? "#d9a8d6" : "#fff", stroke: accent, "stroke-width": 2.5 }));
+    if (!s.onRequest) g.appendChild(el("circle", { cx: x, cy, r: r * 0.42, fill: accent }));   // on-request stops: empty circle
     if (s.onRequest) g.appendChild(el("title", {}, `${s.name} (na żądanie)`));
-    if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#555" }, s.minutes));
+    if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#555" }, s.minutes + "’"));
     const label = el("text", {
       transform: `translate(${x + 2},${y - 10}) rotate(-45)`, "font-size": fs,
       "font-weight": isCur || isLast ? 700 : 400,
