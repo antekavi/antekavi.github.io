@@ -52,8 +52,8 @@ Demo data: `python3 tools/make_demo_gtfs.py demo.zip && python3 server.py --gtfs
 * Nominatim's public server is for light use. Keep `--contact` set and don't expose it to many users at once.
 * The City's old `api.um.warszawa.pl` was switched off on 21 Oct 2026. The new `dane.um.warszawa.pl` needs a personal token
   and, as far as I could verify, has no "all stops of a line" endpoint, which is why the GTFS feed is used.
-* Display rules: each street name is written horizontally, centred between two slanted lines, spanning the stops on
-  that street (long names wrap onto two lines; if still too wide the font shrinks, minimum 8 px); street
+* Display rules: each street name is tilted along two slanted lines and centred between them, spanning the stops on
+  that street (long names wrap onto two lines; if still too big for the channel the font shrinks, minimum 7 px); street
   names containing "Pętla" are not drawn (loops are not shown on the real displays); a "next stop" text that is too
   long for its space is not shrunk but scrolls to its end and back.
 * The server never serves dot-files (`.git`, `.gitignore`), `api_token.txt`, `server.py`, `tools/` or the caches.

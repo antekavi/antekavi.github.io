@@ -146,33 +146,38 @@ function digitHalfHeight(fs) {
   return fs * 0.35;
 }
 
-// Street names are written horizontally between the slanted lines. Fit `text` into `width` panel pixels:
-// one line if it fits at the normal size, otherwise the best two-line split (breaking at spaces and after
-// hyphens); if even that is too wide the font shrinks (never below STREET_MIN_FS).
-const STREET_FS = 14, STREET_MIN_FS = 8;
+// Street names are written along the slanted lines (like the real displays), centred between the two lines of their
+// street. A name goes on one line if it fits the length of the lines, otherwise on two (breaking at spaces and after
+// hyphens); if it is still too big for the channel the font shrinks, so it never crosses a line.
+const STREET_ROT_MAX = 14, STREET_MIN_FS = 7;          // largest / smallest font size
 let measureCtx = null;
 function textWidth(str, fs) {                         // width of `str` in italic Frutiger at `fs` px
   if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
   measureCtx.font = `italic 400 100px Frutiger, "Segoe UI", Arial, sans-serif`;
   return measureCtx.measureText(str).width * fs / 100;
 }
-function layoutStreet(text, width) {
-  const tokens = text.trim().split(/(?<=-)|\s+/).filter(Boolean);
-  const join = a => a.reduce((acc, t, i) => acc + (i && !acc.endsWith("-") ? " " : "") + t, "");
-  let fs = STREET_FS;
-  let lines = [join(tokens)];
-  if (textWidth(lines[0], fs) > width && tokens.length > 1) {
-    let best = null;
-    for (let k = 1; k < tokens.length; k++) {
-      const cand = [join(tokens.slice(0, k)), join(tokens.slice(k))];
-      const w = Math.max(textWidth(cand[0], 100), textWidth(cand[1], 100));
-      if (!best || w < best.w) best = { lines: cand, w };
-    }
-    lines = best.lines;
+const joinTokens = a => a.reduce((acc, t, i) => acc + (i && !acc.endsWith("-") ? " " : "") + t, "");
+// `text` on one line if it fits `width` at size `fs`, else the best two-line split that fits, else null
+function fitLines(tokens, fs, width) {
+  const one = joinTokens(tokens);
+  if (textWidth(one, fs) <= width) return [one];
+  let best = null;
+  for (let k = 1; k < tokens.length; k++) {
+    const cand = [joinTokens(tokens.slice(0, k)), joinTokens(tokens.slice(k))];
+    const w = Math.max(textWidth(cand[0], fs), textWidth(cand[1], fs));
+    if (w <= width && (!best || w < best.w)) best = { lines: cand, w };
   }
-  const widest = Math.max(...lines.map(l => textWidth(l, fs)));
-  if (widest > width) fs = Math.max(STREET_MIN_FS, fs * width / widest);
-  return { lines, fs };
+  return best && best.lines;
+}
+// span: horizontal gap between the two lines; slantLen: length of the lines
+function layoutStreet(text, span, slantLen) {
+  const tokens = text.trim().split(/(?<=-)|\s+/).filter(Boolean);
+  const across = span * 0.92 - 3, along = slantLen - 10;          // free width perpendicular to the lines / free length along them
+  for (let fs = STREET_ROT_MAX; fs >= STREET_MIN_FS; fs--) {
+    const lines = fitLines(tokens, fs, along);
+    if (lines && lines.length * fs * 1.15 <= across + 1) return { rotated: true, lines, fs };
+  }
+  return { rotated: true, lines: [joinTokens(tokens)], fs: STREET_MIN_FS };    // last resort: may be tight
 }
 
 // Round red tram icon (same look as img/bus.png), centred on (cx, cy), diameter d
@@ -353,7 +358,7 @@ function render() {
     }
   }
 
-  // ---- streets: each name sits (horizontally) between two thin slanted lines, centred in the span of stops on that street ----
+  // ---- streets: each name runs along two thin slanted lines, centred between them, spanning the stops on that street ----
   // A stop's own landmark ("poi") wins over its street. Stops without a street carry the previous one on, and
   // loops ("Pętla ...") are never printed (they are not shown on the real displays).
   const isLoop = name => /(^|[^\p{L}])p[eę]t[lł]a([^\p{L}]|$)/iu.test(name);
@@ -365,7 +370,8 @@ function render() {
     if (st && !isLoop(st)) prevStreet = "s:" + st;
     keys.push(prevStreet);
   });
-  const y0 = barY + barH + 3, SLANT_DX = -40, SLANT_DY = 92;
+  const y0 = barY + barH + 3, SLANT_DX = -48, SLANT_DY = 112;      // the lines run to just above the panel's bottom edge
+  const SLANT_LEN = Math.hypot(SLANT_DX, SLANT_DY), SLANT_DEG = Math.atan2(SLANT_DY, -SLANT_DX) * 180 / Math.PI;
   const drawnLines = new Set();
   const slantLine = x => {
     if (drawnLines.has(Math.round(x))) return;
@@ -378,14 +384,12 @@ function render() {
     if (keys[i]) {
       const xL = LX + i * step, xR = LX + (j + 1) * step, xm = (xL + xR) / 2;
       slantLine(xL); slantLine(xR);
-      // horizontal text, one or two lines, centred between the two lines (which lean left going down)
-      const { lines, fs: sfs } = layoutStreet(keys[i].slice(2), Math.max(14, xR - xL - 8));
-      const lh = sfs * 1.15, yc = y0 + SLANT_DY / 2;
-      lines.forEach((ln, k) => {
-        const yy = yc + (k - (lines.length - 1) / 2) * lh;
-        const xx = xm + SLANT_DX * (yy - y0) / SLANT_DY;
-        svg.appendChild(el("text", { x: xx, y: yy + sfs * 0.35, "font-size": sfs, "font-style": "italic", "text-anchor": "middle", fill: "#333" }, ln));
-      });
+      const L = layoutStreet(keys[i].slice(2), xR - xL, SLANT_LEN);
+      const lh = L.fs * 1.15, attrs = { "font-size": L.fs, "font-style": "italic", "text-anchor": "middle", fill: "#333" };
+      // along the lines: one group rotated like them, centred on the middle of the channel between the two lines
+      const g = el("g", { transform: `translate(${xm + SLANT_DX / 2},${y0 + SLANT_DY / 2}) rotate(${-SLANT_DEG})` });
+      L.lines.forEach((ln, k) => g.appendChild(el("text", { ...attrs, x: 0, y: (k - (L.lines.length - 1) / 2) * lh + L.fs * 0.35 }, ln)));
+      svg.appendChild(g);
     }
     i = j + 1;
   }
