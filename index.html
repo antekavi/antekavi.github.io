@@ -172,7 +172,7 @@ function fitLines(tokens, fs, width) {
 // span: horizontal gap between the two lines; slantLen: length of the lines
 function layoutStreet(text, span, slantLen) {
   const tokens = text.trim().split(/(?<=-)|\s+/).filter(Boolean);
-  const across = span * 0.92 - 3, along = slantLen - 10;          // free width perpendicular to the lines / free length along them
+  const across = span * Math.SQRT1_2 - 3, along = slantLen - 10;          // free width perpendicular to the lines / free length along them
   for (let fs = STREET_ROT_MAX; fs >= STREET_MIN_FS; fs--) {
     const lines = fitLines(tokens, fs, along);
     if (lines && lines.length * fs * 1.15 <= across + 1) return { rotated: true, lines, fs };
@@ -339,6 +339,42 @@ function render() {
     g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { current.stop = i; render(); } });
   });
 
+  // ---- streets: where the street changes, a thin line leaves the purple line, runs straight down behind the district bar and
+  //      continues below it tilted like the stop names (45 deg); each street name runs between its two lines ----
+  // A stop's own landmark ("poi") wins over its street. Stops without a street carry the previous one on, and
+  // loops ("Pętla ...") are never printed (they are not shown on the real displays).
+  const isLoop = name => /(^|[^\p{L}])p[eę]t[lł]a([^\p{L}]|$)/iu.test(name);
+  const keys = [];
+  let prevStreet = "";
+  stops.forEach(s => {
+    if (s.poi) { keys.push("p:" + s.poi); return; }
+    const st = (s.street || "").trim();
+    if (st && !isLoop(st)) prevStreet = "s:" + st;
+    keys.push(prevStreet);
+  });
+  const SLANT_DEG = 45;                                              // same tilt as the stop names
+  const y0 = barY + barH;                                            // bottom edge of the district bar: the tilted part starts here
+  const SLANT_DY = Math.min(112, PH - 8 - y0), SLANT_DX = -SLANT_DY / Math.tan(SLANT_DEG * Math.PI / 180);
+  const SLANT_LEN = Math.hypot(SLANT_DX, SLANT_DY);
+  const groups_ = [];                                                // [{xL, xR, text}] one per run of stops on the same street
+  for (let i = 0; i < n;) {
+    let j = i;
+    while (j + 1 < n && keys[j + 1] === keys[i]) j++;
+    if (keys[i]) groups_.push({
+      xL: i === 0 ? LX - 12 : LX + (i - 0.5) * step,                // street borders sit between two stops (bar ends at the strip's ends)
+      xR: j === n - 1 ? lastX + 12 : LX + (j + 0.5) * step,
+      text: keys[i].slice(2)
+    });
+    i = j + 1;
+  }
+  const drawnLines = new Set();
+  groups_.forEach(({ xL, xR }) => [xL, xR].forEach(x => {
+    if (drawnLines.has(Math.round(x))) return;
+    drawnLines.add(Math.round(x));
+    // drawn BEFORE the district bar, so the vertical part is hidden under it
+    svg.appendChild(el("polyline", { points: `${x},${cy + lineH / 2} ${x},${y0} ${x + SLANT_DX},${y0 + SLANT_DY}`, fill: "none", stroke: "#555", "stroke-width": 1 }));
+  }));
+
   // ---- district bar: consecutive stops in one district share a segment ----
   if (stops.some(s => s.district)) {
     const half = step / 2;
@@ -358,41 +394,15 @@ function render() {
     }
   }
 
-  // ---- streets: each name runs along two thin slanted lines, centred between them, spanning the stops on that street ----
-  // A stop's own landmark ("poi") wins over its street. Stops without a street carry the previous one on, and
-  // loops ("Pętla ...") are never printed (they are not shown on the real displays).
-  const isLoop = name => /(^|[^\p{L}])p[eę]t[lł]a([^\p{L}]|$)/iu.test(name);
-  const keys = [];
-  let prevStreet = "";
-  stops.forEach(s => {
-    if (s.poi) { keys.push("p:" + s.poi); return; }
-    const st = (s.street || "").trim();
-    if (st && !isLoop(st)) prevStreet = "s:" + st;
-    keys.push(prevStreet);
+  // street names: along the tilted lines, centred between the two lines of their street (over the bar's bottom edge, never under it)
+  groups_.forEach(({ xL, xR, text }) => {
+    const xm = (xL + xR) / 2;
+    const L = layoutStreet(text, xR - xL, SLANT_LEN);
+    const lh = L.fs * 1.15, attrs = { "font-size": L.fs, "font-style": "italic", "text-anchor": "middle", fill: "#333" };
+    const g = el("g", { transform: `translate(${xm + SLANT_DX / 2},${y0 + SLANT_DY / 2}) rotate(${-SLANT_DEG})` });
+    L.lines.forEach((ln, k) => g.appendChild(el("text", { ...attrs, x: 0, y: (k - (L.lines.length - 1) / 2) * lh + L.fs * 0.35 }, ln)));
+    svg.appendChild(g);
   });
-  const y0 = barY + barH + 3, SLANT_DX = -48, SLANT_DY = 112;      // the lines run to just above the panel's bottom edge
-  const SLANT_LEN = Math.hypot(SLANT_DX, SLANT_DY), SLANT_DEG = Math.atan2(SLANT_DY, -SLANT_DX) * 180 / Math.PI;
-  const drawnLines = new Set();
-  const slantLine = x => {
-    if (drawnLines.has(Math.round(x))) return;
-    drawnLines.add(Math.round(x));
-    svg.appendChild(el("line", { x1: x, y1: y0, x2: x + SLANT_DX, y2: y0 + SLANT_DY, stroke: "#555", "stroke-width": 1 }));
-  };
-  for (let i = 0; i < n;) {
-    let j = i;
-    while (j + 1 < n && keys[j + 1] === keys[i]) j++;
-    if (keys[i]) {
-      const xL = LX + i * step, xR = LX + (j + 1) * step, xm = (xL + xR) / 2;
-      slantLine(xL); slantLine(xR);
-      const L = layoutStreet(keys[i].slice(2), xR - xL, SLANT_LEN);
-      const lh = L.fs * 1.15, attrs = { "font-size": L.fs, "font-style": "italic", "text-anchor": "middle", fill: "#333" };
-      // along the lines: one group rotated like them, centred on the middle of the channel between the two lines
-      const g = el("g", { transform: `translate(${xm + SLANT_DX / 2},${y0 + SLANT_DY / 2}) rotate(${-SLANT_DEG})` });
-      L.lines.forEach((ln, k) => g.appendChild(el("text", { ...attrs, x: 0, y: (k - (L.lines.length - 1) / 2) * lh + L.fs * 0.35 }, ln)));
-      svg.appendChild(g);
-    }
-    i = j + 1;
-  }
 }
 
 // The "next stop" text keeps its size. If it is wider than the space left beside the connections it is shown in a
