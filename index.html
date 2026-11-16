@@ -58,12 +58,13 @@ const BACKDROPS = {
   zwykla: { img: "img/zwykla.png", accent: "#88007e" },
 };
 const DISTRICT_COLOR = "#e03a45";
-const BUS_RED = "#ff0000";
-const BUS_ICON = "img/bus.png";           // red round bus icon shown for bus connections
+// Round connection icons (all cropped to their circle and the same pixel size): types without one fall back to a coloured text tag
+const CONN_ICONS = { bus: "img/bus.png", tram: "img/tram.png", metro: "img/metro.png" };
 const CONN_ICON = 24;                     // diameter of the round connection icons
 const CONN_FS = 20;                       // font size of the connection line numbers (regular weight)
 const CONN_PER_ROW = 6;                   // line numbers per row next to an icon
 const CONN_GAP = 26;                      // space between the "next stop" text and the connections
+const END_SCALE = 1.2;                    // the first and last stop names on the board are written this much bigger
 const TYPE_COLORS = { bus: "#88007e", tram: "#e8730c", metro: "#1d5fb5", train: "#2b8a57", trolleybus: "#7a5a12" };
 const KIND = { bus: "bus", tram: "tram", metro: "M", train: "SKM", trolleybus: "trol" };
 const TYPE_ORDER = ["metro", "train", "tram", "trolleybus", "bus"];
@@ -142,6 +143,12 @@ function textWidth(str, fs) {                         // width of `str` in itali
   measureCtx.font = `italic 400 100px Frutiger, "Segoe UI", Arial, sans-serif`;
   return measureCtx.measureText(str).width * fs / 100;
 }
+let labelCtx = null;
+function labelWidth(str, weight) {                    // width of `str` in Frutiger (weight 400 / 700) per 1 px of font size
+  if (!labelCtx) labelCtx = document.createElement("canvas").getContext("2d");
+  labelCtx.font = `${weight} 100px Frutiger, "Segoe UI", Arial, sans-serif`;
+  return labelCtx.measureText(str).width / 100;
+}
 const joinTokens = a => a.reduce((acc, t, i) => acc + (i && !acc.endsWith("-") ? " " : "") + t, "");
 // `text` on one line if it fits `width` at size `fs`, else the best two-line split that fits, else null
 function fitLines(tokens, fs, width) {
@@ -164,20 +171,6 @@ function layoutStreet(text, span, slantLen) {
     if (lines && lines.length * fs * 1.15 <= across + 1) return { rotated: true, lines, fs };
   }
   return { rotated: true, lines: [joinTokens(tokens)], fs: STREET_MIN_FS };    // last resort: may be tight
-}
-
-// Round red tram icon (same look as img/bus.png), centred on (cx, cy), diameter d
-function tramIcon(cx, cy, d) {
-  const g = el("g", { transform: `translate(${cx - d / 2},${cy - d / 2}) scale(${d / 50})` });
-  const W = { stroke: "#fff", "stroke-width": 2, "stroke-linecap": "round", fill: "none" };
-  g.appendChild(el("circle", { cx: 25, cy: 25, r: 25, fill: BUS_RED }));
-  g.appendChild(el("path", { ...W, d: "M20,8.5 H30 M25,8.5 V13" }));
-  g.appendChild(el("rect", { x: 15, y: 13, width: 20, height: 24, rx: 5, fill: "#fff" }));
-  g.appendChild(el("rect", { x: 18, y: 16, width: 14, height: 9, rx: 1.5, fill: BUS_RED }));
-  g.appendChild(el("circle", { cx: 20.5, cy: 31, r: 1.8, fill: BUS_RED }));
-  g.appendChild(el("circle", { cx: 29.5, cy: 31, r: 1.8, fill: BUS_RED }));
-  g.appendChild(el("path", { ...W, d: "M19,37 L16,43 M31,37 L34,43" }));
-  return g;
 }
 
 function render() {
@@ -227,11 +220,8 @@ function render() {
       const shown = g.items.slice(0, CONN_PER_ROW * 2), rows = Math.ceil(shown.length / CONN_PER_ROW);
       // icon / tag, centred on the rows of numbers
       let iw;
-      if (g.type === "bus") {
-        connNode.appendChild(el("image", { href: BUS_ICON, x: bx, y: CY - D / 2, width: D, height: D }));
-        iw = D;
-      } else if (g.type === "tram") {
-        connNode.appendChild(tramIcon(bx + D / 2, CY, D));
+      if (CONN_ICONS[g.type]) {
+        connNode.appendChild(el("image", { href: CONN_ICONS[g.type], x: bx, y: CY - D / 2, width: D, height: D }));
         iw = D;
       } else {
         iw = KIND[g.type].length * 11 + 16;
@@ -275,8 +265,10 @@ function render() {
 
   // ---- strip geometry ----
   const LX = 400;
-  const longest = Math.max(...stops.map(s => s.name.length));
-  const lastLen = stops[n - 1].name.length;
+  // stop names on the board: first letter in capitals, rest lowercase; the first and last stop are written bigger
+  const names = stops.map(s => titleCase(s.name));
+  const sc = i => (i === 0 || i === n - 1) ? END_SCALE : 1;                  // size factor of label i
+  const wEm = names.map((nm, i) => labelWidth(nm, i === cur || i === n - 1 ? 700 : 400) * sc(i));   // label length per 1 px of the normal font size
   const y = 340, bandH = 42, barY = y + bandH + 6, barH = 25;
   // font size: limited by spacing, and by the room between the header rule and the band
   const BADGE = 22, BADGE_GAP = 5;                                        // wheelchair badge size / gap after the label
@@ -284,13 +276,20 @@ function render() {
   const roomUp = y - 100;
   const approxStep = (1740 - LX) / Math.max(n - 1, 1);
   // each label may only grow until its top end (plus its badge, if any) reaches the header rule
-  const fitFs = Math.min(...stops.map(s => (roomUp - (hasBadge(s) ? BADGE + BADGE_GAP : 0)) / (s.name.length * 0.68 * 0.7071 + 0.6)));
-  const fs = Math.max(11, Math.min(24, approxStep * 0.75, fitFs));
-  const lastDx = lastLen * fs * 0.68 * 0.7071 + 14;
-  const LX_END = Math.min(1740, PW - 14 - lastDx);                      // keep the last label inside the panel
-  const step = Math.max(20, Math.min(94, (LX_END - LX) / Math.max(n - 1, 1)));
+  const fitFs = Math.min(...stops.map((s, i) => (roomUp - (hasBadge(s) ? BADGE + BADGE_GAP : 0)) / (wEm[i] * 0.7071 + 0.6 * sc(i))));
+  let fs = Math.max(11, Math.min(24, approxStep * 0.75, fitFs));
+  // keep every label (and its badge) inside the panel: at font size f, label i reaches dx(i, f) to the right of its circle at x = LX + i * step
+  const dx = (i, f) => wEm[i] * f * 0.7071 + 14 + (hasBadge(stops[i]) ? (BADGE_GAP + BADGE) * 0.7071 : 0);
+  const stepFor = f => {
+    let m = (1740 - LX) / Math.max(n - 1, 1);
+    for (let i = 1; i < n; i++) m = Math.min(m, (PW - 14 - dx(i, f) - LX) / i);
+    return Math.max(20, Math.min(94, m));
+  };
+  let step = stepFor(fs);
+  // the font may not be bigger than the spacing allows (neighbouring names must not crowd each other)
+  for (let k = 0; k < 3 && fs > 11 && fs > step * 0.75 + 0.01; k++) { fs = Math.max(11, step * 0.75); step = stepFor(fs); }
   const lastX = LX + step * (n - 1);
-  const rise = Math.ceil(longest * fs * 0.68 * 0.7071) + 14;
+  const rise = Math.ceil(Math.max(...wEm) * fs * 0.7071) + 14;
 
   // thin purple bar with the stop circles on it; the minutes sit in their own row below it
   const lineH = 8, cy = y + 9;
@@ -305,17 +304,18 @@ function render() {
     if (!s.onRequest) g.appendChild(el("circle", { cx: x, cy, r: r * 0.42, fill: accent }));   // on-request stops: empty circle
     if (s.onRequest) g.appendChild(el("title", {}, `${s.name} (na żądanie)`));
     if (s.minutes != null) g.appendChild(el("text", { x, y: y + bandH - 7, "font-size": mfs, "text-anchor": "middle", fill: "#555" }, s.minutes + "’"));
+    const lfs = fs * sc(i);                                                  // first and last stop: bigger
     const label = el("text", {
-      transform: `translate(${x + 2},${y - 10}) rotate(-45)`, "font-size": fs,
+      transform: `translate(${x + 2},${y - 10}) rotate(-45)`, "font-size": lfs,
       "font-weight": isCur || isLast ? 700 : 400,
-      fill: isCur ? accent : passed ? "#8f8f8f" : "#1a1a1a"
-    }, s.name.toUpperCase());
+      fill: isCur ? accent : passed ? "#8f8f8f" : (i === 0 || isLast) ? accent : "#1a1a1a"   // purple: current, first and last stop; passed stops turn grey
+    }, names[i]);
     g.appendChild(label);
     svg.appendChild(g);
     if (hasBadge(s)) {
       // badge continues the label's direction, just past its upper end, centred on the text height
       const L = label.getComputedTextLength(), k = 0.7071;
-      const d = L + BADGE_GAP + BADGE / 2, up = fs * 0.33;
+      const d = L + BADGE_GAP + BADGE / 2, up = lfs * 0.33;
       g.appendChild(wheelchairBadge(x + 2 + k * d - k * up, y - 10 - k * d - k * up, BADGE, s.wheelchair));
     }
     g.addEventListener("click", () => { current.stop = i; render(); });
@@ -491,10 +491,21 @@ function cleanStopName(name) {
 }
 // Title case for the "next stop" header: every word (also after a dash or an opening quote) starts with a capital letter,
 // the rest is lowercase ("METRO KONDRATOWICZA" -> "Metro Kondratowicza"); Roman numerals stay capitals ("Os. Lewandów II").
+// How a stop name is written on the board and in the header: first letter of each word in capitals, the rest in lowercase,
+// abbreviations in capitals ("Rembertów-Akademia", "Pl. Zawiszy", "CH Targówek", "PKP Rembertów (Strażacka)").
+// ZTM names already are in that form, so they are shown exactly as they are (this keeps "i", "z", "na", "PWiK", "1920 r." right).
+// A name that is in capitals as a whole ("RYNEK ŁAZIENKOWSKI") is converted; there, two-letter abbreviations (CH, AK, KS ...),
+// roman numerals and well-known acronyms (PKP ...) stay in capitals.
+const KEEP_CAPS = /^(pkp|skm|wkd|osp|sggw|uksw|awf|wat|zus|gus|nik|ds|ow)$/i;
+const SHORT_WORDS = /^(na|do|od|ku|ze|we|za|po)$/i;                 // two-letter words that are not abbreviations
 function titleCase(name) {
-  return name.toLocaleLowerCase("pl")
-    .replace(/(^|[\s\-„"'(\/])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase("pl"))
-    .replace(/(^|[\s-])(ii|iii|iv|vi|vii|viii|ix)(?=$|[\s-])/gi, (m, a, b) => a + b.toUpperCase());
+  const allCaps = !/\p{Ll}/u.test(name) && /\s/.test(name.trim());
+  if (!allCaps) return name.replace(/^\p{Ll}/u, c => c.toLocaleUpperCase("pl"));
+  return name.replace(/[^\s\-„”"()\/]+/gu, w => {
+    const letters = w.replace(/[^\p{L}]/gu, "");
+    if (KEEP_CAPS.test(letters) || /^[IVX]+$/.test(letters) || w.includes("+") || (w === letters && letters.length === 2 && !SHORT_WORDS.test(letters))) return w;
+    return w.toLocaleLowerCase("pl").replace(/\p{L}/u, c => c.toLocaleUpperCase("pl"));
+  });
 }
 function cleanLine(line) {
   if (line) for (const d of line.directions) for (const s of d.stops) s.name = cleanStopName(s.name);
