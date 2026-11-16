@@ -112,9 +112,9 @@ const WC_TITLE = {
 };
 
 // Square wheelchair badge drawn in a 24x24 box, centred on (cx, cy), scaled to `size` and tilted along the label.
-function wheelchairBadge(cx, cy, size, kind) {
+function wheelchairBadge(cx, cy, size, kind, rot = -45) {
   // rotated -45deg like the stop names, so the badge sits level with the text
-  const g = el("g", { transform: `translate(${cx},${cy}) rotate(-45) translate(${-size / 2},${-size / 2}) scale(${size / 24})` });
+  const g = el("g", { transform: `translate(${cx},${cy}) rotate(${rot}) translate(${-size / 2},${-size / 2}) scale(${size / 24})` });
   if (kind === "partial") {
     // blue badge with the lower-right half red
     g.appendChild(el("rect", { width: 24, height: 24, rx: 5, fill: "#1d5fb5" }));
@@ -403,6 +403,22 @@ function render() {
     const g = el("g", { transform: `translate(${xm + SLANT_DX / 2},${y0 + SLANT_DY / 2}) rotate(${-SLANT_DEG})` });
     L.lines.forEach((ln, k) => g.appendChild(el("text", { ...attrs, x: 0, y: (k - (L.lines.length - 1) / 2) * lh + L.fs * 0.35 }, ln)));
     svg.appendChild(g);
+  });
+
+  // ---- legend for the wheelchair badges, bottom right corner ----
+  const LEG_FS = 15, LEG_CY = 519, LEG_B = 22, LEG_GAP = 8, LEG_SEP = 28, LEG_RIGHT = PW - 16;
+  const legend = [
+    { kind: "partial", text: "przystanek o utrudnionym dostępie dla osób niepełnosprawnych" },
+    { kind: "none", text: "przystanek niedostępny dla osób niepełnosprawnych" }
+  ].map(it => {
+    const t = svg.appendChild(el("text", { y: LEG_CY + LEG_FS * 0.35, "font-size": LEG_FS, "font-weight": 700, fill: "#1a1a1a" }, it.text));
+    return { ...it, node: t, w: t.getComputedTextLength() };
+  });
+  let lx = LEG_RIGHT - legend.reduce((a, it) => a + LEG_B + LEG_GAP + it.w, 0) - LEG_SEP * (legend.length - 1);
+  legend.forEach(it => {
+    svg.appendChild(wheelchairBadge(lx + LEG_B / 2, LEG_CY, LEG_B, it.kind, 0));
+    it.node.setAttribute("x", lx + LEG_B + LEG_GAP);
+    lx += LEG_B + LEG_GAP + it.w + LEG_SEP;
   });
 }
 
