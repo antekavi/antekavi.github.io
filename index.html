@@ -267,7 +267,7 @@ function render() {
   nextNode = el("text", { x: fieldL, y: 64, fill: "#1a1a1a" });
   nextOnRequest = !!stops[cur].onRequest;
   nextT1 = el("tspan", { "font-size": 42, "font-weight": 300 }, nextLabelText());
-  nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, stops[cur].name.toUpperCase());
+  nextT2 = el("tspan", { "font-size": 54, "font-weight": 700, fill: accent }, titleCase(stops[cur].name));
   nextNode.append(nextT1, nextT2);
   nextG.appendChild(nextNode);
   nextField = { l: fieldL, r: fieldR };                       // the text must leave room for the connections (fitNext)
@@ -485,15 +485,31 @@ function setStatus(text, isError = false) {
   n.classList.toggle("err", isError);
 }
 
+// Stop names: no spaces around a dash ("Rembertów - Akademia" -> "Rembertów-Akademia"). Applied to every stop of a line as it is loaded.
+function cleanStopName(name) {
+  return String(name).replace(/\s*[-\u2010-\u2015]\s*/g, "-").replace(/\s{2,}/g, " ").trim();
+}
+// Title case for the "next stop" header: every word (also after a dash or an opening quote) starts with a capital letter,
+// the rest is lowercase ("METRO KONDRATOWICZA" -> "Metro Kondratowicza"); Roman numerals stay capitals ("Os. Lewandów II").
+function titleCase(name) {
+  return name.toLocaleLowerCase("pl")
+    .replace(/(^|[\s\-„"'(\/])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase("pl"))
+    .replace(/(^|[\s-])(ii|iii|iv|vi|vii|viii|ix)(?=$|[\s-])/gi, (m, a, b) => a + b.toUpperCase());
+}
+function cleanLine(line) {
+  if (line) for (const d of line.directions) for (const s of d.stops) s.name = cleanStopName(s.name);
+  return line;
+}
+
 // One line, from the server (live lookup) or, without a server, from the static data/lines.json.
 async function fetchLine(id) {
   if (API_OK) {
     const r = await fetch(`api/line/${encodeURIComponent(id)}`);
     if (r.status === 404) return null;
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+    return cleanLine(await r.json());
   }
-  return FULL.lines.find(l => l.line.toLowerCase() === String(id).trim().toLowerCase()) || null;
+  return cleanLine(FULL.lines.find(l => l.line.toLowerCase() === String(id).trim().toLowerCase()) || null);
 }
 
 async function openLine(id, dir = 0) {
