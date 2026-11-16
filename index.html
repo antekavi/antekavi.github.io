@@ -354,7 +354,8 @@ function render() {
   });
   const SLANT_DEG = 45;                                              // same tilt as the stop names
   const y0 = barY + barH;                                            // bottom edge of the district bar: the tilted part starts here
-  const SLANT_DY = Math.min(112, PH - 8 - y0), SLANT_DX = -SLANT_DY / Math.tan(SLANT_DEG * Math.PI / 180);
+  const SLANT_BOTTOM = 500;                                          // the lines end level with the top of the clock box (y = 500 in the backdrop)
+  const SLANT_DY = SLANT_BOTTOM - y0, SLANT_DX = -SLANT_DY / Math.tan(SLANT_DEG * Math.PI / 180);
   const SLANT_LEN = Math.hypot(SLANT_DX, SLANT_DY);
   const groups_ = [];                                                // [{xL, xR, text}] one per run of stops on the same street
   for (let i = 0; i < n;) {
